@@ -278,14 +278,13 @@ class PredictionEngine:
         return max(-1.0, min(1.0, diff * 1.5))
 
     def _score_team_strength(self, home: TeamData, away: TeamData) -> float:
-        """Score team strength based on market value and UEFA coefficient."""
+        """Score team strength based on market value, UEFA coefficient, and league points."""
         score = 0.0
         components = 0
 
         # Market value comparison (log-scale to handle huge disparities)
         if home.market_value and away.market_value and home.market_value > 0 and away.market_value > 0:
             ratio = home.market_value / away.market_value
-            # log2: ratio of 2.0 → 1.0 advantage, ratio of 0.5 → -1.0
             log_ratio = math.log2(ratio)
             score += max(-1.0, min(1.0, log_ratio * 0.3))
             components += 1
@@ -293,9 +292,16 @@ class PredictionEngine:
         # UEFA coefficient comparison
         if home.uefa_coefficient and away.uefa_coefficient and home.uefa_coefficient > 0 and away.uefa_coefficient > 0:
             diff = home.uefa_coefficient - away.uefa_coefficient
-            # Normalize: ~20 points diff = full 1.0 advantage
             score += max(-1.0, min(1.0, diff / 20.0))
             components += 1
+
+        # League points as fallback proxy for team strength
+        if not components and home.league_points and away.league_points:
+            if home.league_points > 0 and away.league_points > 0:
+                diff = home.league_points - away.league_points
+                # ~20 point gap in a season = significant strength difference
+                score += max(-1.0, min(1.0, diff / 25.0))
+                components += 1
 
         if components == 0:
             return 0.0

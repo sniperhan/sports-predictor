@@ -91,6 +91,11 @@ class DataFetcher:
             f2 = self._executor.submit(self._fetch_league_table_data, team_name, league)
             futures[f2] = "league_table"
 
+        # Task 3: H2H data -> wins/draws/losses (only for home team, shared data)
+        if is_home:
+            f3 = self._executor.submit(self._fetch_h2h_data, team_name, opponent)
+            futures[f3] = "h2h"
+
         # Collect results
         season_url = None
         for future in concurrent.futures.as_completed(futures):
@@ -120,6 +125,12 @@ class DataFetcher:
                             d5 = max(0, min(n - w5, round(draws / total_games * n)))
                             l5 = n - w5 - d5
                             data.recent_form = ['W'] * w5 + ['D'] * d5 + ['L'] * l5
+                elif task == "h2h" and result:
+                    w, d, l = result
+                    if w > 0 or d > 0 or l > 0:
+                        data.h2h_wins = w
+                        data.h2h_draws = d
+                        data.h2h_losses = l
             except Exception:
                 pass
 
@@ -487,3 +498,248 @@ class DataFetcher:
         except Exception:
             pass
         return [], [], []
+
+    # ─── Task 4: H2H from Rivalry Pages ─────────────────────
+
+    def _fetch_h2h_data(self, team1: str, team2: str) -> tuple:
+        """Fetch head-to-head data from Wikipedia rivalry pages.
+        Returns (h2h_wins, h2h_draws, h2h_losses) from team1's perspective.
+        """
+        try:
+            html = self._search_rivalry_page(team1, team2)
+            if not html:
+                html = self._search_rivalry_page(team2, team1)
+            if not html:
+                return 0, 0, 0
+            return self._parse_rivalry_page(html, team1, team2)
+        except Exception:
+            return 0, 0, 0
+
+    def _search_rivalry_page(self, team1: str, team2: str) -> Optional[str]:
+        """Search Wikipedia for a rivalry page between two teams."""
+        try:
+            s = self._make_session()
+            search_terms = [
+                f"{team1} {team2} rivalry",
+                f"{team1} F.C. {team2} F.C. rivalry",
+            ]
+
+            def is_good_match(title_lower, t1_parts, t2_parts):
+                """Check if a Wikipedia page title matches our rivalry criteria."""
+                t1_match = any(p in title_lower for p in t1_parts if len(p) > 2)
+                t2_match = any(p in title_lower for p in t2_parts if len(p) > 2)
+                is_rivalry = any(kw in title_lower for kw in [
+                    "rivalry", "rival", "derby", "head-to-head", "h2h",
+                    "head to head", "klassiker", "clásico", "clasico", "derby"
+                ])
+                is_football = any(kw in title_lower for kw in [
+                    "f.c.", "fc ", "football", "soccer", "premier league",
+                    "klassiker", "clásico", "clasico", "derby", "madrid",
+                    "barcelona", "bayern", "dortmund", "borussia", "munich"
+                ])
+                return t1_match and t2_match and is_rivalry and is_football
+
+            t1_parts_all = [p for p in team1.lower().split() if len(p) > 2]
+            t2_parts_all = [p for p in team2.lower().split() if len(p) > 2]
+
+            for term in search_terms:
+                params = {
+                    "action": "query", "list": "search",
+                    "srsearch": term, "format": "json", "srlimit": 5,
+                }
+                resp = s.get(self.WIKI_API, params=params, timeout=10)
+                if resp.status_code != 200:
+                    continue
+                results = resp.json().get("query", {}).get("search", [])
+
+                # Pass 1: strict match
+                for r in results:
+                    title = r.get("title", "")
+                    if is_good_match(title.lower(), t1_parts_all, t2_parts_all):
+                        page_url = self._wiki_url(title)
+                        resp2 = s.get(page_url, timeout=10)
+                        if resp2.status_code == 200:
+                            return resp2.text
+
+                # Pass 2: lenient - take first result that is rivalry/football
+                for r in results:
+                    title_lower = r.get("title", "").lower()
+                    is_rivalry = any(kw in title_lower for kw in [
+                        "rivalry", "rival", "derby", "head-to-head",
+                        "klassiker", "clásico", "clasico"
+                    ])
+                    if is_rivalry:
+                        page_url = self._wiki_url(r["title"])
+                        resp2 = s.get(page_url, timeout=10)
+                        if resp2.status_code == 200:
+                            return resp2.text
+
+            return None
+        except Exception:
+            return None
+
+    def _wiki_url(self, title: str) -> str:
+        return f"{self.WIKI_BASE}{quote_plus(title.replace(' ', '_'))}"
+
+    def _parse_rivalry_page(self, html: str, team1: str, team2: str) -> tuple:
+        """Parse a Wikipedia rivalry page for H2H statistics.
+
+        Uses match results tables with color-coded scores:
+        - Red background (#FF0000) = home team won
+        - Blue background = away team won
+        - Silver/gray background = draw
+
+        Tables are split by venue, so we can determine W/D/L from team1's perspective.
+        Returns (h2h_wins, h2h_draws, h2h_losses) from team1's perspective.
+        """
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            t1_lower = team1.lower()
+
+            # Strategy 1: Parse the "Head-to-head" stats table's Total row
+            # The table headers tell us which column is which team's wins
+            for table in soup.select("table.wikitable"):
+                headers = []
+                header_row = table.select_one("tr")
+                if header_row:
+                    headers = [h.get_text(strip=True).lower() for h in header_row.select("th, td")]
+
+                # Check if this looks like a H2H stats table (has competition + win/draw columns)
+                has_wins_col = any("win" in h for h in headers)
+                has_draws_col = any("draw" in h for h in headers)
+                if not (has_wins_col or has_draws_col):
+                    continue
+
+                # Find the Total row
+                for row in table.select("tr"):
+                    cells = row.select("th, td")
+                    if not cells:
+                        continue
+                    first_cell = cells[0].get_text(strip=True).lower()
+                    if "total" not in first_cell:
+                        continue
+
+                    # Map columns to values
+                    vals = []
+                    for c in cells:
+                        try:
+                            vals.append(int(re.sub(r'[^\d]', '', c.get_text(strip=True))))
+                        except ValueError:
+                            vals.append(0)
+
+                    t1_win_idx = None
+                    t2_win_idx = None
+                    draw_idx = None
+
+                    for i, h in enumerate(headers):
+                        if i >= len(vals):
+                            break
+                        h_clean = re.sub(r'[^a-z\s]', '', h).strip()
+                        if "win" in h_clean:
+                            t1_parts = [p for p in team1.lower().split() if len(p) > 2]
+                            t2_parts = [p for p in team2.lower().split() if len(p) > 2]
+                            if any(p in h_clean for p in t1_parts):
+                                t1_win_idx = i
+                            elif any(p in h_clean for p in t2_parts):
+                                t2_win_idx = i
+                        elif "draw" in h_clean:
+                            draw_idx = i
+
+                    if t1_win_idx is not None and t2_win_idx is not None:
+                        w = vals[t1_win_idx] if t1_win_idx < len(vals) else 0
+                        d = vals[draw_idx] if draw_idx is not None and draw_idx < len(vals) else 0
+                        l = vals[t2_win_idx] if t2_win_idx < len(vals) else 0
+                        if w > 0 or l > 0:
+                            return w, d, l
+
+                    break  # Only check first matching table
+
+            # Strategy 2: Parse match results from color-coded score cells
+            all_matches = self._parse_rivalry_matches(soup, team1, team2)
+            if len(all_matches) >= 3:
+                recent = all_matches[-10:]
+                w = sum(1 for m in recent if m["result"] == "W")
+                d = sum(1 for m in recent if m["result"] == "D")
+                l = sum(1 for m in recent if m["result"] == "L")
+                if w > 0 or l > 0:
+                    return w, d, l
+
+            return 0, 0, 0
+        except Exception:
+            return 0, 0, 0
+
+    def _parse_rivalry_matches(self, soup, team1: str, team2: str) -> list:
+        """Parse match results from rivalry page match tables.
+
+        Tables are split by venue. Score cells use color coding:
+        - #FF0000 (red) = home team won
+        - blue = away team won
+        - silver/gray = draw
+
+        Returns list of dicts with 'result' key ('W', 'D', 'L') from team1's perspective.
+        """
+        matches = []
+        t1_lower = team1.lower()
+        t2_lower = team2.lower()
+
+        for table in soup.select("table.wikitable"):
+            caption = table.select_one("caption")
+            caption_text = caption.get_text(strip=True).lower() if caption else ""
+
+            # Determine which team is "home" for this table
+            t1_is_home = any(p in caption_text for p in t1_lower.split() if len(p) > 2)
+            t2_is_home = any(p in caption_text for p in t2_lower.split() if len(p) > 2)
+
+            if not t1_is_home and not t2_is_home:
+                continue
+
+            for row in table.select("tr"):
+                cells = row.select("th, td")
+                if len(cells) < 2:
+                    continue
+
+                first_text = cells[0].get_text(strip=True)
+                # Skip header rows and empty rows
+                if first_text.lower() in ("date", "score", "competition", ""):
+                    continue
+                if not re.search(r'\d{4}', first_text):  # Must contain a year
+                    continue
+
+                # Get the score cell
+                score_cell = cells[1] if len(cells) > 1 else None
+                if not score_cell:
+                    continue
+
+                score_text = score_cell.get_text(strip=True)
+                if not re.search(r'\d+[–\-]\d+', score_text):
+                    continue
+
+                # Determine result from cell color
+                style = score_cell.get("style", "") if score_cell.name == "td" else ""
+                style_lower = style.lower()
+
+                if "#ff0000" in style_lower or "red" in style_lower or "background:red" in style_lower:
+                    # Home team won
+                    result = "W" if t1_is_home else "L"
+                elif "blue" in style_lower:
+                    # Away team won
+                    result = "L" if t1_is_home else "W"
+                elif "silver" in style_lower or "gray" in style_lower or "grey" in style_lower:
+                    result = "D"
+                else:
+                    # Fallback: parse score directly
+                    score_match = re.search(r'(\d+)[–\-](\d+)', score_text)
+                    if score_match:
+                        home_goals = int(score_match.group(1))
+                        away_goals = int(score_match.group(2))
+                        if t1_is_home:
+                            result = "W" if home_goals > away_goals else ("D" if home_goals == away_goals else "L")
+                        else:
+                            result = "L" if home_goals > away_goals else ("D" if home_goals == away_goals else "W")
+                    else:
+                        continue
+
+                matches.append({"result": result})
+
+        # Sort by recency (tables are in chronological order, last matches are at the bottom)
+        return matches
