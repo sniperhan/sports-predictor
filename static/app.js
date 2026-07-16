@@ -62,8 +62,6 @@ async function runPrediction() {
         handicap: document.getElementById("handicap").value || "",
         home_league_pos: parseOrNull("home-pos"),
         away_league_pos: parseOrNull("away-pos"),
-        home_points: parseOrNull("home-points"),
-        away_points: parseOrNull("away-points"),
         total_teams: parseOrNull("total-teams"),
         home_form: document.getElementById("home-form").value || null,
         away_form: document.getElementById("away-form").value || null,
@@ -86,6 +84,9 @@ async function runPrediction() {
         away_market_value: parseFloatOrNull("away-market-value"),
         home_uefa_coefficient: parseFloatOrNull("home-uefa"),
         away_uefa_coefficient: parseFloatOrNull("away-uefa"),
+        home_odds_win: parseFloatOrNull("home-odds"),
+        away_odds_win: parseFloatOrNull("away-odds"),
+        odds_draw: parseFloatOrNull("draw-odds"),
     };
 
     try {
@@ -122,8 +123,8 @@ function renderResult(r) {
     const dimLabels = {
         home_away: "主客场", recent_form: "近期状态", h2h: "历史交锋",
         league_position: "联赛排名", team_strength: "球队实力",
-        goals_data: "攻防数据", injuries: "伤病停赛",
-        match_fitness: "比赛状态",
+        odds: "市场赔率", goals_data: "攻防数据",
+        injuries: "伤病停赛", match_fitness: "比赛状态",
     };
 
     let dimRows = "";

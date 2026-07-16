@@ -7,6 +7,7 @@ Synchronous implementation with requests library for compatibility.
 
 import re
 import time
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -36,12 +37,13 @@ class DataFetcher:
     ) -> TeamData:
         """Search for team data using multiple queries."""
         data = TeamData(name=team_name)
+        year = str(datetime.now().year)
 
         queries = [
-            f"{team_name} {league} 2026 排名 积分 战绩",
-            f"{team_name} 近期战绩 {league} 2026",
+            f"{team_name} {league} {year} 排名 积分 战绩",
+            f"{team_name} 近期战绩 {league} {year}",
             f"{team_name} vs {opponent} 历史交锋",
-            f"{team_name} 伤病 停赛 {league} 2026",
+            f"{team_name} 伤病 停赛 {league} {year}",
         ]
 
         all_text = ""
@@ -57,7 +59,7 @@ class DataFetcher:
         if not all_text:
             try:
                 all_text = self._ddg_search(
-                    f"{team_name} football {league} 2026 season record form"
+                    f"{team_name} football {league} {year} season record form"
                 )
             except Exception:
                 pass

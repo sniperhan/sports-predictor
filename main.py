@@ -60,6 +60,9 @@ class MatchRequest(BaseModel):
     away_market_value: Optional[float] = None
     home_uefa_coefficient: Optional[float] = None
     away_uefa_coefficient: Optional[float] = None
+    home_odds_win: Optional[float] = None
+    away_odds_win: Optional[float] = None
+    odds_draw: Optional[float] = None
 
 
 class PredictionResponse(BaseModel):
@@ -104,6 +107,8 @@ async def predict(req: MatchRequest):
             in_season=req.home_in_season,
             market_value=req.home_market_value,
             uefa_coefficient=req.home_uefa_coefficient,
+            odds_win=req.home_odds_win,
+            odds_draw=req.odds_draw,
         )
 
         away = TeamData(
@@ -118,6 +123,7 @@ async def predict(req: MatchRequest):
             in_season=req.away_in_season,
             market_value=req.away_market_value,
             uefa_coefficient=req.away_uefa_coefficient,
+            odds_win=req.away_odds_win,
         )
 
         # Parse form strings
@@ -143,7 +149,7 @@ async def predict(req: MatchRequest):
                 data_quality = "正在联网搜索补充数据..."
                 fetcher = DataFetcher()
 
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 home_data = await loop.run_in_executor(
                     executor,
                     fetcher.search_team_data,

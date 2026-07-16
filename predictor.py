@@ -62,14 +62,15 @@ class PredictionEngine:
 
     # Weights calibrated from real prediction results
     WEIGHTS = {
-        "home_away": 0.20,       # Home/away performance split
-        "recent_form": 0.18,     # Last 5-10 matches
-        "h2h": 0.13,             # Head-to-head record
-        "league_position": 0.12, # League standing
-        "team_strength": 0.10,   # Market value + UEFA coefficient
-        "goals_data": 0.09,      # GF/GA differential
-        "injuries": 0.11,        # Key absences
-        "match_fitness": 0.07,   # In-season vs off-season
+        "home_away": 0.19,       # Home/away performance split
+        "recent_form": 0.17,     # Last 5-10 matches
+        "h2h": 0.12,             # Head-to-head record
+        "league_position": 0.11, # League standing
+        "team_strength": 0.09,   # Market value + UEFA coefficient
+        "odds": 0.08,            # Market odds (implied probability)
+        "goals_data": 0.08,      # GF/GA differential
+        "injuries": 0.10,        # Key absences
+        "match_fitness": 0.06,   # In-season vs off-season
     }
 
     def analyze(self, home: TeamData, away: TeamData, league: str, handicap: str = "") -> PredictionResult:
@@ -77,7 +78,7 @@ class PredictionEngine:
         factors = []
         risks = []
 
-        # 1. Home/Away Performance (22%)
+        # 1. Home/Away Performance (20%)
         ha_score = self._score_home_away(home, away)
         scores["home_away"] = ha_score
         if home.home_form:
@@ -89,7 +90,7 @@ class PredictionEngine:
             away_total = len(away.away_form)
             factors.append(f"客队客场: {away_losses}负/{away_total}场")
 
-        # 2. Recent Form (20%)
+        # 2. Recent Form (18%)
         rf_score = self._score_recent_form(home, away)
         scores["recent_form"] = rf_score
         if home.recent_form:
@@ -99,14 +100,14 @@ class PredictionEngine:
             last5_away = sum(1 for r in away.recent_form[:5] if r == 'W')
             factors.append(f"客队近5场: {last5_away}胜")
 
-        # 3. Head-to-Head (15%)
+        # 3. Head-to-Head (13%)
         h2h_score = self._score_h2h(home, away)
         scores["h2h"] = h2h_score
         total_h2h = home.h2h_wins + home.h2h_draws + home.h2h_losses
         if total_h2h > 0:
             factors.append(f"历史交锋: 主队{home.h2h_wins}胜{home.h2h_draws}平{home.h2h_losses}负")
 
-        # 4. League Position (13%)
+        # 4. League Position (12%)
         lp_score = self._score_league_position(home, away)
         scores["league_position"] = lp_score
         if home.league_position and away.league_position:
@@ -120,13 +121,21 @@ class PredictionEngine:
         if home.uefa_coefficient and away.uefa_coefficient:
             factors.append(f"欧战系数: 主{home.uefa_coefficient:.1f} vs 客{away.uefa_coefficient:.1f}")
 
-        # 6. Goals Data (9%)
+        # 6. Market Odds (8%)
+        odds_score = self._score_odds(home, away)
+        scores["odds"] = odds_score
+        if home.odds_win and away.odds_win and home.odds_draw:
+            home_implied = (1.0 / home.odds_win) * 100
+            away_implied = (1.0 / away.odds_win) * 100
+            factors.append(f"赔率隐含概率: 主{home_implied:.0f}% vs 客{away_implied:.0f}%")
+
+        # 7. Goals Data (8%)
         gd_score = self._score_goals(home, away)
         scores["goals_data"] = gd_score
         if home.goals_for and away.goals_against:
             factors.append(f"主队场均进{home.goals_for:.1f}球 | 客队场均失{away.goals_against:.1f}球")
 
-        # 7. Injuries/Suspensions (11%)
+        # 8. Injuries/Suspensions (10%)
         inj_score = self._score_injuries(home, away)
         scores["injuries"] = inj_score
         if home.key_injuries or home.key_suspensions:
@@ -134,7 +143,7 @@ class PredictionEngine:
         if away.key_injuries or away.key_suspensions:
             factors.append(f"客队缺阵: {', '.join(away.key_injuries + away.key_suspensions)}")
 
-        # 8. Match Fitness (7%)
+        # 9. Match Fitness (6%)
         mf_score = self._score_match_fitness(home, away)
         scores["match_fitness"] = mf_score
         if not home.in_season:
@@ -185,8 +194,8 @@ class PredictionEngine:
         # Handicap bet
         handicap_bet = self._generate_handicap_bet(recommended, margin, handicap)
 
-        # Predicted score
-        predicted_score = self._generate_score(home, away, home_adv)
+        # Predicted score (must be consistent with recommended bet)
+        predicted_score = self._generate_score(home, away, home_adv, recommended)
 
         return PredictionResult(
             win_prob=round(win_prob, 3),
@@ -292,6 +301,28 @@ class PredictionEngine:
             return 0.0
         return max(-1.0, min(1.0, score / components))
 
+    def _score_odds(self, home: TeamData, away: TeamData) -> float:
+        """Score based on market odds implied probabilities."""
+        if not home.odds_win or not away.odds_win or not home.odds_draw:
+            return 0.0
+        if home.odds_win <= 0 or away.odds_win <= 0 or home.odds_draw <= 0:
+            return 0.0
+
+        # Convert odds to implied probabilities
+        home_imp = 1.0 / home.odds_win
+        away_imp = 1.0 / away.odds_win
+        draw_imp = 1.0 / home.odds_draw
+
+        # Remove overround (bookmaker margin), re-normalize
+        overround = home_imp + away_imp + draw_imp
+        home_prob = home_imp / overround
+        away_prob = away_imp / overround
+        draw_prob = draw_imp / overround
+
+        # Score: how much does the market favor home? 0.5 diff = full 1.0
+        diff = home_prob - away_prob
+        return max(-1.0, min(1.0, diff * 2.0))
+
     def _score_goals(self, home: TeamData, away: TeamData) -> float:
         """Score goal differential and offensive/defensive quality."""
         score = 0.0
@@ -333,19 +364,19 @@ class PredictionEngine:
         total = len(scores)
 
         if positive >= total * 0.7:
-            return "high"
+            return "高度一致"
         elif negative >= total * 0.7:
-            return "high"
+            return "高度一致"
         elif abs(positive - negative) <= 1:
-            return "contradictory"
+            return "数据矛盾"
         elif abs(positive - negative) <= 2:
-            return "low"
+            return "一致性低"
         else:
-            return "medium"
+            return "中等一致"
 
     def _calc_confidence(self, consistency: str, margin: float) -> int:
         """Calculate confidence stars (1-5)."""
-        base = {"high": 4, "medium": 3, "low": 2, "contradictory": 1}
+        base = {"高度一致": 4, "中等一致": 3, "一致性低": 2, "数据矛盾": 1}
         stars = base.get(consistency, 2)
 
         if margin > 0.20:
@@ -356,9 +387,33 @@ class PredictionEngine:
         return min(5, max(1, stars))
 
     def _generate_handicap_bet(self, recommended: str, margin: float, handicap: str) -> str:
-        """Generate handicap recommendation."""
+        """Generate handicap recommendation using actual handicap if available."""
         direction_cn = {"home": "主队", "draw": "平局", "away": "客队"}
+        direction_en = {"home": "主队", "draw": "平局", "away": "客队"}
 
+        # Parse handicap to give specific advice
+        if handicap and handicap != "draw" and recommended != "draw":
+            handicap_val = 0.0
+            handicap_side = ""
+            if handicap.startswith("home-"):
+                handicap_val = float(handicap.replace("home-", ""))
+                handicap_side = "home"
+            elif handicap.startswith("away-"):
+                handicap_val = float(handicap.replace("away-", ""))
+                handicap_side = "away"
+
+            if handicap_side == recommended:
+                if margin > 0.20:
+                    return f"推荐{direction_cn[recommended]}方向（让{handicap_val}球，穿盘可期）"
+                elif margin > 0.10:
+                    return f"推荐{direction_cn[recommended]}方向（让{handicap_val}球，赢半博全赢）"
+                else:
+                    return f"推荐{direction_cn[recommended]}方向（让{handicap_val}球，谨慎博穿盘）"
+            elif handicap_side and handicap_side != recommended:
+                return f"{direction_cn[recommended]}方向有优势，对手让{handicap_val}球，{direction_cn[recommended]}不败可期"
+
+        if recommended == "draw":
+            return "推荐平局方向，让球盘建议回避"
         if margin > 0.25:
             return f"推荐{direction_cn[recommended]}方向（穿盘）"
         elif margin > 0.12:
@@ -366,8 +421,8 @@ class PredictionEngine:
         else:
             return f"推荐{direction_cn[recommended]}方向（谨慎）"
 
-    def _generate_score(self, home: TeamData, away: TeamData, home_adv: float) -> str:
-        """Generate predicted score consistent with recommended direction."""
+    def _generate_score(self, home: TeamData, away: TeamData, home_adv: float, recommended: str) -> str:
+        """Generate predicted score consistent with recommended bet direction."""
         # Estimate total goals
         total_goals = 2.5
 
@@ -379,24 +434,27 @@ class PredictionEngine:
         total_goals = max(1.5, min(5.0, total_goals))
         total_goals = round(total_goals)
 
-        # Split based on advantage, ensure consistency with direction
-        if home_adv > 0.1:
-            # Home advantage: home scores more
+        if recommended == "draw":
+            base = total_goals // 2
+            if total_goals % 2 == 0:
+                home_goals = base
+                away_goals = base
+            else:
+                home_goals = base
+                away_goals = base + 1
+                if home_goals == away_goals:
+                    home_goals = max(0, base - 1)
+                    away_goals = home_goals
+        elif recommended == "home":
             home_goals = max(1, round(total_goals * 0.6))
             away_goals = total_goals - home_goals
             if home_goals <= away_goals:
                 home_goals = away_goals + 1
-        elif home_adv < -0.1:
-            # Away advantage: away scores more
+        else:  # away
             away_goals = max(1, round(total_goals * 0.6))
             home_goals = total_goals - away_goals
             if away_goals <= home_goals:
                 away_goals = home_goals + 1
-        else:
-            # Even match
-            base = total_goals // 2
-            home_goals = base
-            away_goals = total_goals - base
 
         # Clamp
         home_goals = max(0, min(6, home_goals))
