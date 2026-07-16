@@ -1,5 +1,5 @@
 // Sports Prediction System - Frontend Logic
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 
 const API_URL = "/api/predict";
 
