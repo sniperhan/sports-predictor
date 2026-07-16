@@ -817,7 +817,7 @@ class DataFetcher:
     # ─── Task 5: Injuries & Suspensions ─────────────────────
 
     def fetch_injuries(self, team_name: str) -> tuple:
-        """Fetch injury/suspension data for a team.
+        """Fetch injury/suspension data for a team via Wikipedia search.
         Returns (injuries_list, suspensions_list).
         """
         search_name = self._translate_name(team_name)
@@ -826,20 +826,21 @@ class DataFetcher:
 
         try:
             s = self._make_session()
-            # Search for team's current season page which often lists injuries
+
+            # Search team's 2025-26 season page for injury mentions
             params = {
                 "action": "query", "list": "search",
-                "srsearch": f"{search_name} 2025-26 season squad injuries",
-                "format": "json", "srlimit": 3,
+                "srsearch": f'"{search_name}" "injury"', "format": "json", "srlimit": 5,
             }
             resp = s.get(self.WIKI_API, params=params, timeout=20)
             if resp.status_code != 200:
                 return [], []
 
             results = resp.json().get("query", {}).get("search", [])
+
             for r in results:
                 title = r.get("title", "")
-                if "season" not in title.lower() and "squad" not in title.lower():
+                if "season" not in title.lower():
                     continue
 
                 page_url = self._wiki_url(title)
@@ -848,47 +849,129 @@ class DataFetcher:
                     continue
 
                 soup = BeautifulSoup(resp2.text, "html.parser")
-                page_text = soup.get_text().lower()
+                page_text = soup.get_text()
 
-                # Look for injury-related sections
-                injury_keywords = ["injured", "injury", "out for", "ruled out",
-                                   "unavailable", "absent", "sidelined", "doubt"]
+                # Find sentences containing injury keywords
+                for sentence in re.split(r'[.!?\n]', page_text):
+                    s_lower = sentence.lower().strip()
+                    if len(s_lower) < 15:
+                        continue
 
-                # Find injury mentions near player names
-                for heading in soup.select("h2, h3, h4"):
-                    heading_text = heading.get_text(strip=True).lower()
-                    if any(kw in heading_text for kw in ["injury", "squad", "player", "absent"]):
-                        # Get the content after this heading
-                        content = []
-                        for sibling in heading.find_next_siblings():
-                            if sibling.name in ("h2", "h3", "h4"):
-                                break
-                            content.append(sibling.get_text())
+                    found_kw = None
+                    for kw in ["injured", "injury", "out for", "out with",
+                               "ruled out", "unavailable", "sidelined", "will miss"]:
+                        if kw in s_lower:
+                            found_kw = kw
+                            break
 
-                        full_text = " ".join(content)
-                        # Look for common injury patterns
-                        for line in full_text.split("."):
-                            line_lower = line.lower()
-                            if any(kw in line_lower for kw in injury_keywords):
-                                # Try to extract player name (capitalized words before injury keyword)
-                                for kw in injury_keywords:
-                                    if kw in line_lower:
-                                        idx = line_lower.index(kw)
-                                        before = line[:idx].strip()
-                                        # Extract the last few words as player name
-                                        name_match = re.findall(r'[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}', before)
-                                        if name_match:
-                                            injuries.append(name_match[-1])
-                                            break
-                        break  # Found injury section
+                    if not found_kw:
+                        continue
+
+                    # Extract capitalized names near the keyword
+                    names = re.findall(r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})', sentence)
+                    for name in names:
+                        nl = name.lower()
+                        # Filter out non-player names
+                        skip_words = ["league", "season", "match", "team", "club", "cup",
+                                      "final", "round", "group", "stage", "transfer",
+                                      "window", "january", "february", "march", "april",
+                                      "may", "june", "july", "august", "september",
+                                      "october", "november", "december", "premier",
+                                      "champions", "europa", "fa cup", "carabao"]
+                        if any(sw in nl for sw in skip_words):
+                            continue
+                        if len(name) > 4 and name not in injuries:
+                            injuries.append(name)
 
                 if injuries:
-                    break  # Got what we needed
+                    break
 
         except Exception:
             pass
 
-        return injuries[:5], suspensions  # Top 5 injuries
+        return injuries[:5], suspensions[:3]
+
+            for search_term in searches:
+                if injuries and suspensions:
+                    break
+
+                params = {
+                    "action": "query", "list": "search",
+                    "srsearch": search_term, "format": "json", "srlimit": 5,
+                }
+                resp = s.get(self.WIKI_API, params=params, timeout=20)
+                if resp.status_code != 200:
+                    continue
+
+                results = resp.json().get("query", {}).get("search", [])
+                for r in results:
+                    title = r.get("title", "")
+                    title_lower = title.lower()
+
+                    # Skip non-football or non-team pages
+                    if not any(kw in title_lower for kw in
+                               ["f.c.", "fc ", "football", "soccer", "season", "squad"]):
+                        continue
+
+                    page_url = self._wiki_url(title)
+                    resp2 = s.get(page_url, timeout=25)
+                    if resp2.status_code != 200:
+                        continue
+
+                    soup = BeautifulSoup(resp2.text, "html.parser")
+                    page_text = soup.get_text()
+
+                    # Find injury mentions in the page
+                    for line in page_text.split("\n"):
+                        line_stripped = line.strip()
+                        if len(line_stripped) < 10 or len(line_stripped) > 300:
+                            continue
+
+                        line_lower = line_stripped.lower()
+
+                        # Check for injury keywords
+                        found_injury = False
+                        for kw in injury_kw:
+                            if kw in line_lower:
+                                found_injury = True
+                                break
+
+                        if not found_injury:
+                            for kw in susp_kw:
+                                if kw in line_lower:
+                                    # Extract player name
+                                    names = re.findall(
+                                        r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})',
+                                        line_stripped
+                                    )
+                                    for name in names:
+                                        if len(name) > 4 and name not in suspensions:
+                                            suspensions.append(name)
+                                    break
+                            continue
+
+                        # Extract player names (proper nouns) from the line
+                        names = re.findall(
+                            r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})',
+                            line_stripped
+                        )
+                        for name in names:
+                            # Filter out non-player names
+                            name_lower = name.lower()
+                            if any(skip in name_lower for skip in
+                                   ["league", "season", "match", "team", "club",
+                                    "cup", "final", "round", "group", "stage"]):
+                                continue
+                            if len(name) > 4 and name not in injuries:
+                                injuries.append(name)
+
+                    if injuries:
+                        break  # Found what we needed
+
+        except Exception:
+            pass
+
+        return injuries[:5], suspensions[:3]
 
     def _fetch_h2h_data(self, team1: str, team2: str) -> tuple:
         """Fetch head-to-head data from Wikipedia rivalry pages.
