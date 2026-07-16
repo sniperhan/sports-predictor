@@ -215,24 +215,35 @@ class PredictionEngine:
         """Score home/away performance. Returns -1 to 1, positive favors home."""
         score = 0.0
 
-        # Home team home form
-        if home.home_form:
-            home_pts = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in home.home_form)
-            home_max = len(home.home_form) * 3
+        # Home team home form - fallback to overall form if home form unavailable
+        home_form_data = home.home_form if home.home_form else home.recent_form
+        if home_form_data:
+            home_pts = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in home_form_data)
+            home_max = len(home_form_data) * 3
             if home_max > 0:
                 score += (home_pts / home_max - 0.45) * 0.6
 
-        # Away team away form
-        if away.away_form:
-            away_pts = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in away.away_form)
-            away_max = len(away.away_form) * 3
+        # Away team away form - fallback to overall form if away form unavailable
+        away_form_data = away.away_form if away.away_form else away.recent_form
+        if away_form_data:
+            away_pts = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in away_form_data)
+            away_max = len(away_form_data) * 3
             if away_max > 0:
                 score -= (away_pts / away_max - 0.35) * 0.6
 
-        # Home goals vs away goals defense
-        if home.goals_for_home and away.goals_against_away:
-            diff = home.goals_for_home - away.goals_against_away
+        # Home goals vs away goals defense (use overall as fallback)
+        home_gf = home.goals_for_home if home.goals_for_home else home.goals_for
+        away_ga = away.goals_against_away if away.goals_against_away else away.goals_against
+        if home_gf and away_ga:
+            diff = home_gf - away_ga
             score += diff * 0.1
+
+        # Away goals vs home defense (additional factor)
+        away_gf = away.goals_for_away if away.goals_for_away else away.goals_for
+        home_ga = home.goals_against_home if home.goals_against_home else home.goals_against
+        if away_gf and home_ga:
+            diff = home_ga - away_gf
+            score -= diff * 0.1
 
         return max(-1.0, min(1.0, score))
 
