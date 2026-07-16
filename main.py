@@ -141,77 +141,123 @@ async def predict(req: MatchRequest):
         home.h2h_draws = req.h2h_draws or 0
         home.h2h_losses = req.h2h_wins_away or 0
 
-        # Auto-search for data if minimal input provided
-        data_quality = "用户手动输入"
+        # Auto-search for comprehensive data - ALWAYS run
+        fetched_home_fields = []
+        fetched_away_fields = []
+        data_quality = "用户手动输入 (未联网)"
 
-        if not req.home_league_pos or not req.away_league_pos:
-            try:
-                data_quality = "正在联网搜索补充数据..."
-                fetcher = DataFetcher()
+        try:
+            fetcher = DataFetcher()
+            loop = asyncio.get_running_loop()
 
-                loop = asyncio.get_running_loop()
-                home_data = await loop.run_in_executor(
+            # Run both searches in parallel for speed
+            home_data, away_data = await asyncio.gather(
+                loop.run_in_executor(
                     executor,
                     fetcher.search_team_data,
                     req.home_team, req.away_team, req.league, True
-                )
-                away_data = await loop.run_in_executor(
+                ),
+                loop.run_in_executor(
                     executor,
                     fetcher.search_team_data,
                     req.away_team, req.home_team, req.league, False
-                )
+                ),
+            )
+            fetcher.close()
 
-                # Merge fetched data (don't override user-provided data)
-                if not home.league_position:
-                    home.league_position = home_data.league_position
-                if not home.league_points:
-                    home.league_points = home_data.league_points
-                if not home.recent_form:
-                    home.recent_form = home_data.recent_form
-                if not home.home_form:
-                    home.home_form = home_data.home_form
-                if not home.goals_for:
-                    home.goals_for = home_data.goals_for
-                if not home.goals_against:
-                    home.goals_against = home_data.goals_against
-                if not home.key_injuries:
-                    home.key_injuries = home_data.key_injuries
-                if not home.key_suspensions:
-                    home.key_suspensions = home_data.key_suspensions
-                if not home.market_value:
-                    home.market_value = home_data.market_value
-                if not home.uefa_coefficient:
-                    home.uefa_coefficient = home_data.uefa_coefficient
-                if home.h2h_wins == 0 and home.h2h_losses == 0:
-                    home.h2h_wins = home_data.h2h_wins
-                    home.h2h_draws = home_data.h2h_draws
-                    home.h2h_losses = home_data.h2h_losses
+            # Merge fetched data for HOME team (don't override user-provided data)
+            if home_data.league_position and not home.league_position:
+                home.league_position = home_data.league_position
+                fetched_home_fields.append("排名")
+            if home_data.total_teams and not home.total_teams:
+                home.total_teams = home_data.total_teams
+            if home_data.league_points and not home.league_points:
+                home.league_points = home_data.league_points
+            if home_data.recent_form and not home.recent_form:
+                home.recent_form = home_data.recent_form
+                fetched_home_fields.append("近期战绩")
+            if home_data.home_form and not home.home_form:
+                home.home_form = home_data.home_form
+                fetched_home_fields.append("主场战绩")
+            if home_data.goals_for and not home.goals_for:
+                home.goals_for = home_data.goals_for
+                fetched_home_fields.append("进球")
+            if home_data.goals_against and not home.goals_against:
+                home.goals_against = home_data.goals_against
+                fetched_home_fields.append("失球")
+            if home_data.goals_for_home and not home.goals_for_home:
+                home.goals_for_home = home_data.goals_for_home
+            if home_data.goals_against_home and not home.goals_against_home:
+                home.goals_against_home = home_data.goals_against_home
+            if home_data.key_injuries and not home.key_injuries:
+                home.key_injuries = home_data.key_injuries
+                fetched_home_fields.append("伤停")
+            if home_data.key_suspensions and not home.key_suspensions:
+                home.key_suspensions = home_data.key_suspensions
+            if home_data.market_value and not home.market_value:
+                home.market_value = home_data.market_value
+                fetched_home_fields.append("身价")
+            if home_data.uefa_coefficient and not home.uefa_coefficient:
+                home.uefa_coefficient = home_data.uefa_coefficient
+                fetched_home_fields.append("欧战系数")
+            if (home_data.h2h_wins > 0 or home_data.h2h_losses > 0) and home.h2h_wins == 0 and home.h2h_losses == 0:
+                home.h2h_wins = home_data.h2h_wins
+                home.h2h_draws = home_data.h2h_draws
+                home.h2h_losses = home_data.h2h_losses
+                fetched_home_fields.append("交锋记录")
 
-                if not away.league_position:
-                    away.league_position = away_data.league_position
-                if not away.league_points:
-                    away.league_points = away_data.league_points
-                if not away.recent_form:
-                    away.recent_form = away_data.recent_form
-                if not away.away_form:
-                    away.away_form = away_data.away_form
-                if not away.goals_for:
-                    away.goals_for = away_data.goals_for
-                if not away.goals_against:
-                    away.goals_against = away_data.goals_against
-                if not away.key_injuries:
-                    away.key_injuries = away_data.key_injuries
-                if not away.key_suspensions:
-                    away.key_suspensions = away_data.key_suspensions
-                if not away.market_value:
-                    away.market_value = away_data.market_value
-                if not away.uefa_coefficient:
-                    away.uefa_coefficient = away_data.uefa_coefficient
+            # Merge fetched data for AWAY team
+            if away_data.league_position and not away.league_position:
+                away.league_position = away_data.league_position
+                fetched_away_fields.append("排名")
+            if away_data.total_teams and not away.total_teams:
+                away.total_teams = away_data.total_teams
+            if away_data.league_points and not away.league_points:
+                away.league_points = away_data.league_points
+            if away_data.recent_form and not away.recent_form:
+                away.recent_form = away_data.recent_form
+                fetched_away_fields.append("近期战绩")
+            if away_data.away_form and not away.away_form:
+                away.away_form = away_data.away_form
+                fetched_away_fields.append("客场战绩")
+            if away_data.goals_for and not away.goals_for:
+                away.goals_for = away_data.goals_for
+                fetched_away_fields.append("进球")
+            if away_data.goals_against and not away.goals_against:
+                away.goals_against = away_data.goals_against
+                fetched_away_fields.append("失球")
+            if away_data.goals_for_away and not away.goals_for_away:
+                away.goals_for_away = away_data.goals_for_away
+            if away_data.goals_against_away and not away.goals_against_away:
+                away.goals_against_away = away_data.goals_against_away
+            if away_data.key_injuries and not away.key_injuries:
+                away.key_injuries = away_data.key_injuries
+                fetched_away_fields.append("伤停")
+            if away_data.key_suspensions and not away.key_suspensions:
+                away.key_suspensions = away_data.key_suspensions
+            if away_data.market_value and not away.market_value:
+                away.market_value = away_data.market_value
+                fetched_away_fields.append("身价")
+            if away_data.uefa_coefficient and not away.uefa_coefficient:
+                away.uefa_coefficient = away_data.uefa_coefficient
+                fetched_away_fields.append("欧战系数")
 
-                fetcher.close()
-                data_quality = "联网搜索完成"
-            except Exception as e:
-                data_quality = f"联网搜索失败，使用用户提供的数据 ({str(e)[:50]})"
+            # Build data quality summary
+            home_count = len(fetched_home_fields)
+            away_count = len(fetched_away_fields)
+            total_fields = home_count + away_count
+
+            if total_fields >= 10:
+                data_quality = f"联网获取 {total_fields} 项数据 (主队: {', '.join(fetched_home_fields)} | 客队: {', '.join(fetched_away_fields)})"
+            elif total_fields >= 5:
+                data_quality = f"联网获取 {total_fields} 项数据 (主: {', '.join(fetched_home_fields[:3])}... | 客: {', '.join(fetched_away_fields[:3])}...)"
+            elif total_fields > 0:
+                data_quality = f"联网获取 {total_fields} 项数据"
+            else:
+                data_quality = "联网搜索未获取到有效数据，使用用户手动输入"
+
+        except Exception as e:
+            data_quality = f"联网搜索失败，使用手动数据 (错误: {str(e)[:40]})"
 
         # Run prediction
         result = engine.analyze(home, away, req.league, req.handicap or "")

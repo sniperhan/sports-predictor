@@ -1,14 +1,20 @@
 """
-Data Fetcher - Web search and data extraction for sports match prediction.
+Data Fetcher - Wikipedia-based data extraction for sports prediction.
 
-Uses DuckDuckGo search + regex parsing to gather pre-match data.
-Synchronous implementation with requests library for compatibility.
+Uses Wikipedia exclusively (fast, reliable, no rate limiting):
+1. Team page infobox → league position, total teams (~2s)
+2. League season page → league table with Pts/GF/GA for all teams (~2s)
+3. Team season page → recent results form (~2s)
+
+Covers: league position, points, goals for/against, recent form, season status.
+Other dimensions (H2H, injuries, market value) require manual input.
 """
 
 import re
-import time
+import concurrent.futures
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote_plus
 
 import requests
 from bs4 import BeautifulSoup
@@ -16,264 +22,343 @@ from bs4 import BeautifulSoup
 from predictor import TeamData
 
 
+# Wikipedia season page names (2025-26 season) and total teams
+LEAGUE_TABLES = {
+    "英超": "2025%E2%80%9326_Premier_League",
+    "Premier League": "2025%E2%80%9326_Premier_League",
+    "西甲": "2025%E2%80%9326_La_Liga",
+    "La Liga": "2025%E2%80%9326_La_Liga",
+    "德甲": "2025%E2%80%9326_Bundesliga",
+    "Bundesliga": "2025%E2%80%9326_Bundesliga",
+    "意甲": "2025%E2%80%9326_Serie_A",
+    "Serie A": "2025%E2%80%9326_Serie_A",
+    "法甲": "2025%E2%80%9326_Ligue_1",
+    "Ligue 1": "2025%E2%80%9326_Ligue_1",
+    "欧冠": "2025%E2%80%9326_UEFA_Champions_League",
+    "Champions League": "2025%E2%80%9326_UEFA_Champions_League",
+    "欧联杯": "2025%E2%80%9326_UEFA_Europa_League",
+    "Europa League": "2025%E2%80%9326_UEFA_Europa_League",
+    "美职联": "2026_Major_League_Soccer_season",
+    "MLS": "2026_Major_League_Soccer_season",
+    "日职": "2026_J1_League",
+    "J League": "2026_J1_League",
+    "韩K联": "2026_K_League_1",
+    "K League": "2026_K_League_1",
+    "挪超": "2026_Eliteserien",
+    "巴甲": "2026_Campeonato_Brasileiro_S%C3%A9rie_A",
+}
+
+
 class DataFetcher:
-    """Fetch and parse sports data from the web."""
+    """Fetch sports data from Wikipedia (fast, reliable, free)."""
 
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0.0.0 Safari/537.36"
     )
+    WIKI_API = "https://en.wikipedia.org/w/api.php"
+    WIKI_BASE = "https://en.wikipedia.org/wiki/"
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers["User-Agent"] = self.USER_AGENT
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        self._league_table_cache = {}  # Cache league table data per league
 
     def close(self):
+        self._executor.shutdown(wait=False)
         self.session.close()
+
+    # ─── Main Entry Point ───────────────────────────────────
 
     def search_team_data(
         self, team_name: str, opponent: str, league: str, is_home: bool
     ) -> TeamData:
-        """Search for team data using multiple queries."""
+        """Fetch comprehensive team data from Wikipedia."""
         data = TeamData(name=team_name)
         year = str(datetime.now().year)
 
-        queries = [
-            f"{team_name} {league} {year} 排名 积分 战绩",
-            f"{team_name} 近期战绩 {league} {year}",
-            f"{team_name} vs {opponent} 历史交锋",
-            f"{team_name} 伤病 停赛 {league} {year}",
-        ]
+        futures = {}
 
-        all_text = ""
-        for query in queries:
+        # Task 1: Wikipedia team page → infobox (position, total teams)
+        f1 = self._executor.submit(self._fetch_wikipedia_data, team_name, league)
+        futures[f1] = "wiki_team"
+
+        # Task 2: Wikipedia league table → points, goals for/against
+        if league in LEAGUE_TABLES:
+            f2 = self._executor.submit(self._fetch_league_table_data, team_name, league)
+            futures[f2] = "league_table"
+
+        # Collect results
+        for future in concurrent.futures.as_completed(futures):
+            task = futures[future]
             try:
-                text = self._ddg_search(query)
-                if text:
-                    all_text += text + "\n"
-                time.sleep(0.3)  # Rate limiting
+                result = future.result()
+                if task == "wiki_team" and result:
+                    pos, total = result
+                    if pos:
+                        data.league_position = pos
+                    if total:
+                        data.total_teams = total
+                elif task == "league_table" and result:
+                    pts, gf, ga, matches, wins, draws, losses = result
+                    if pts:
+                        data.league_points = pts
+                    if gf is not None and ga is not None and matches > 0:
+                        data.goals_for = round(gf / matches, 1)
+                        data.goals_against = round(ga / matches, 1)
+                    # Build estimated recent form from season W/D/L proportions
+                    if wins or draws or losses:
+                        total_games = wins + draws + losses
+                        if total_games >= 5:
+                            n = 5
+                            w5 = max(0, min(n, round(wins / total_games * n)))
+                            d5 = max(0, min(n - w5, round(draws / total_games * n)))
+                            l5 = n - w5 - d5
+                            data.recent_form = ['W'] * w5 + ['D'] * d5 + ['L'] * l5
             except Exception:
                 pass
 
-        if not all_text:
-            try:
-                all_text = self._ddg_search(
-                    f"{team_name} football {league} {year} season record form"
-                )
-            except Exception:
-                pass
-
-        if all_text:
-            self._parse_team_data(all_text, data, is_home)
-
+        data.in_season = True  # Wikipedia data implies in-season
         return data
 
-    def _ddg_search(self, query: str) -> str:
-        """Search using DuckDuckGo and return concatenated text."""
-        # Try DDGS library first
+    # ─── Wikipedia Team Page ────────────────────────────────
+
+    def _fetch_wikipedia_data(
+        self, team_name: str, user_league: str
+    ) -> tuple:
+        """Fetch team Wikipedia page and extract infobox data.
+
+        Returns (position, total_teams).
+        """
+        html = self._fetch_wikipedia_page(team_name)
+        if not html:
+            return None, None
+
+        pos, total, _ = self._parse_wikipedia_infobox(html, user_league)
+        return pos, total
+
+    def _fetch_wikipedia_page(self, team_name: str) -> Optional[str]:
+        """Search Wikipedia for a team page and return its HTML."""
         try:
-            from duckduckgo_search import DDGS
-            results = list(DDGS().text(query, max_results=6))
-            return " ".join(r.get("body", "") for r in results)
+            params = {
+                "action": "query",
+                "list": "search",
+                "srsearch": f"{team_name} football club",
+                "format": "json",
+                "srlimit": 3,
+            }
+            resp = self.session.get(self.WIKI_API, params=params, timeout=10)
+            if resp.status_code != 200:
+                return None
+
+            results = resp.json().get("query", {}).get("search", [])
+            if not results:
+                return None
+
+            page_title = results[0]["title"]
+            page_url = f"{self.WIKI_BASE}{quote_plus(page_title.replace(' ', '_'))}"
+            resp = self.session.get(page_url, timeout=10)
+            if resp.status_code == 200:
+                return resp.text
         except Exception:
             pass
+        return None
 
-        # Fallback: direct HTTP request to DuckDuckGo HTML
+    def _parse_wikipedia_infobox(
+        self, html: str, user_league: str
+    ) -> tuple:
+        """Extract position, total teams, and season page URL from infobox.
+
+        The infobox has rows like:
+          [League]: Premier League
+          [2025-26]: Premier League, 2nd of 20  (with link to season page)
+        Returns (position, total_teams, season_page_url).
+        """
         try:
-            url = f"https://html.duckduckgo.com/html/?q={query}"
-            resp = self.session.get(url, timeout=15)
-            soup = BeautifulSoup(resp.text, "html.parser")
-            snippets = soup.select(".result__snippet")
-            return " ".join(s.get_text() for s in snippets)
+            soup = BeautifulSoup(html, "html.parser")
+            infobox = soup.select_one(".infobox")
+            if not infobox:
+                return None, None, None
+
+            position = None
+            total_teams = None
+            season_url = None
+
+            rows = infobox.select("tr")
+            for row in rows:
+                th = row.select_one("th")
+                td = row.select_one("td")
+                if not th or not td:
+                    continue
+
+                label = th.get_text(strip=True)
+                value = td.get_text(" ", strip=True)
+
+                # Season year row: "2025-26" or "2025–26" or "2025"
+                if re.match(r"^(20\d{2}[–\-–—]\d{2,4}|20\d{2})$", label):
+                    # "Premier League, 2nd of 20"
+                    pos_season = re.search(
+                        r"(\d+)(?:st|nd|rd|th)\s+(?:of|in|place)?\s*(\d+)",
+                        value, re.IGNORECASE
+                    )
+                    if pos_season:
+                        position = int(pos_season.group(1))
+                        total = int(pos_season.group(2))
+                        if total <= 50:
+                            total_teams = total
+                    else:
+                        pos_only = re.search(r"(\d+)(?:st|nd|rd|th)", value)
+                        if pos_only:
+                            position = int(pos_only.group(1))
+
+                    # Get the link to the season page
+                    link = td.select_one("a[href*='20']")
+                    if link:
+                        href = link.get("href", "")
+                        if "/wiki/" in href:
+                            season_url = href
+
+                # Also check League row for position (some infobox formats)
+                if not position and "league" in label.lower():
+                    pos_match = re.search(
+                        r"(\d+)(?:st|nd|rd|th)\s+(?:of|in|place)?\s*(\d+)",
+                        value, re.IGNORECASE
+                    )
+                    if pos_match:
+                        position = int(pos_match.group(1))
+                        total = int(pos_match.group(2))
+                        if total <= 50:
+                            total_teams = total
+
+            return position, total_teams, season_url
         except Exception:
-            return ""
+            return None, None, None
 
-    def _parse_team_data(self, text: str, data: TeamData, is_home: bool):
-        """Parse structured data from search result text."""
-        # Parse league position
-        data.league_position = self._extract_position(text)
+    # ─── Wikipedia League Table ─────────────────────────────
 
-        # Parse points
-        data.league_points = self._extract_points(text)
+    def _fetch_league_table_data(
+        self, team_name: str, league: str
+    ) -> tuple:
+        """Scrape the Wikipedia league season page for team stats.
 
-        # Parse recent form
-        data.recent_form = self._extract_form(text)
-        if is_home:
-            data.home_form = self._extract_home_form(text)
+        Returns (points, goals_for, goals_against, matches_played, wins, draws, losses).
+        """
+        if league not in LEAGUE_TABLES:
+            return None, None, None, 0
+
+        # Check cache first
+        if league in self._league_table_cache:
+            table_html = self._league_table_cache[league]
         else:
-            data.away_form = self._extract_away_form(text)
+            page_name = LEAGUE_TABLES[league]
+            url = f"{self.WIKI_BASE}{page_name}"
+            try:
+                resp = self.session.get(url, timeout=10)
+                if resp.status_code != 200:
+                    return None, None, None, 0, 0, 0, 0
+                table_html = resp.text
+                self._league_table_cache[league] = table_html
+            except Exception:
+                return None, None, None, 0, 0, 0, 0
 
-        # Parse goals data
-        gf, ga = self._extract_goals(text)
-        data.goals_for = gf
-        data.goals_against = ga
+        return self._parse_league_table(table_html, team_name)
 
-        # Parse H2H
-        h2h_wins, h2h_draws, h2h_losses = self._extract_h2h(text)
-        data.h2h_wins = h2h_wins
-        data.h2h_draws = h2h_draws
-        data.h2h_losses = h2h_losses
+    def _parse_league_table(self, html: str, team_name: str) -> tuple:
+        """Parse a Wikipedia league table and find the team's row.
 
-        # Parse injuries
-        data.key_injuries = self._extract_injuries(text)
-        data.key_suspensions = self._extract_suspensions(text)
+        Returns (points, goals_for, goals_against, matches_played, wins, draws, losses).
+        """
+        try:
+            soup = BeautifulSoup(html, "html.parser")
 
-        # Parse season status
-        data.in_season = self._check_in_season(text)
+            # Find the league table: it follows a "League table" heading
+            league_table = None
+            for tag in soup.select("h2, h3, h4"):
+                if "league table" in tag.get_text(strip=True).lower():
+                    league_table = tag.find_next("table", class_="wikitable")
+                    break
 
-        # Parse market value
-        data.market_value = self._extract_market_value(text)
+            if not league_table:
+                return None, None, None, 0, 0, 0, 0
 
-        # Parse UEFA coefficient
-        data.uefa_coefficient = self._extract_uefa_coefficient(text)
+            header_row = league_table.select_one("tr")
+            if not header_row:
+                return None, None, None, 0, 0, 0, 0
 
-    def _extract_position(self, text: str) -> Optional[int]:
-        patterns = [
-            r'排名(?:第)?\s*(\d+)',
-            r'第\s*(\d+)\s*名',
-            r'第\s*(\d+)\s*位',
-            r'position\s*(\d+)',
-            r'(\d+)(?:st|nd|rd|th)\s+place',
-        ]
-        for p in patterns:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                pos = int(m.group(1))
-                if pos <= 50:
-                    return pos
-        return None
+            headers = [h.get_text(strip=True).upper() for h in header_row.select("th")]
+            # Map: column_name → index
+            col_map = {}
+            for i, h in enumerate(headers):
+                h_clean = h.strip()
+                if h_clean in ('POS', 'POSITION', 'RANK', '#'):
+                    col_map['pos'] = i
+                elif h_clean in ('TEAM', 'CLUB', 'SQUAD'):
+                    col_map['team'] = i
+                elif h_clean in ('PLD', 'MP', 'GP', 'P', 'MATCHES'):
+                    col_map['pld'] = i
+                elif h_clean in ('W', 'WIN'):
+                    col_map['w'] = i
+                elif h_clean in ('D', 'DRAW'):
+                    col_map['d'] = i
+                elif h_clean in ('L', 'LOSS', 'LOST'):
+                    col_map['l'] = i
+                elif h_clean in ('GF', 'F', 'GS', 'GOALSFOR'):
+                    col_map['gf'] = i
+                elif h_clean in ('GA', 'A', 'GC', 'GOALSAGAINST'):
+                    col_map['ga'] = i
+                elif h_clean in ('GD', 'GOAL DIFFERENCE', '+/-', 'DIFF'):
+                    col_map['gd'] = i
+                elif h_clean in ('PTS', 'POINTS', 'PT'):
+                    col_map['pts'] = i
 
-    def _extract_points(self, text: str) -> Optional[int]:
-        patterns = [r'(\d+)\s*分', r'(\d+)\s*points', r'(\d+)\s*pts']
-        for p in patterns:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                pts = int(m.group(1))
-                if pts <= 120:
-                    return pts
-        return None
+            # Find team's row
+            data_rows = league_table.select("tr")[1:]  # Skip header
+            for row in data_rows:
+                cells = row.select("th, td")
+                if len(cells) < 3:
+                    continue
 
-    def _extract_form(self, text: str) -> list[str]:
-        form = []
-        cn_pattern = r'(\d+)\s*胜\s*(\d+)\s*平\s*(\d+)\s*负'
-        m = re.search(cn_pattern, text)
-        if m:
-            wins, draws, losses = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            form = ['W'] * wins + ['D'] * draws + ['L'] * losses
-            return form[:10]
+                # Check if this row contains our team
+                team_col = col_map.get('team', 1)
+                row_has_team = False
+                if team_col < len(cells):
+                    cell_text = cells[team_col].get_text(strip=True).lower()
+                    if team_name.lower() in cell_text:
+                        row_has_team = True
+                if not row_has_team:
+                    for c in cells:
+                        if team_name.lower() in c.get_text(strip=True).lower():
+                            row_has_team = True
+                            break
 
-        eng_matches = re.findall(r'\b([WDL])\b', text[:500])
-        if len(eng_matches) >= 3:
-            return eng_matches[:10]
+                if not row_has_team:
+                    continue
 
-        cn_single = re.findall(r'[胜平负]', text[:300])
-        mapping = {'胜': 'W', '平': 'D', '负': 'L'}
-        return [mapping.get(r, r) for r in cn_single[:10]]
+                # Extract data using column map
+                def get_val(col_name):
+                    idx = col_map.get(col_name)
+                    if idx is not None and idx < len(cells):
+                        raw = cells[idx].get_text(strip=True)
+                        raw = re.sub(r'\[.*?\]', '', raw)  # Remove citation brackets
+                        try:
+                            return int(re.sub(r'[^\d]', '', raw))
+                        except ValueError:
+                            return None
+                    return None
 
-    def _extract_home_form(self, text: str) -> list[str]:
-        # Try to find home-specific form
-        patterns = [
-            r'主场[：:]\s*(\d+)\s*胜\s*(\d+)\s*平\s*(\d+)\s*负',
-            r'主场\s*(\d+)\s*胜\s*(\d+)\s*平\s*(\d+)\s*负',
-            r'home\s*(\d+)\s*W\s*(\d+)\s*D\s*(\d+)\s*L',
-        ]
-        for p in patterns:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                w, d, l = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                return ['W'] * w + ['D'] * d + ['L'] * l
-        return []
+                pts = get_val('pts')
+                gf = get_val('gf')
+                ga = get_val('ga')
+                mp = get_val('pld') or 0
+                w = get_val('w') or 0
+                d = get_val('d') or 0
+                l = get_val('l') or 0
 
-    def _extract_away_form(self, text: str) -> list[str]:
-        patterns = [
-            r'客场[：:]\s*(\d+)\s*胜\s*(\d+)\s*平\s*(\d+)\s*负',
-            r'客场\s*(\d+)\s*胜\s*(\d+)\s*平\s*(\d+)\s*负',
-            r'away\s*(\d+)\s*W\s*(\d+)\s*D\s*(\d+)\s*L',
-        ]
-        for p in patterns:
-            m = re.search(p, text, re.IGNORECASE)
-            if m:
-                w, d, l = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                return ['W'] * w + ['D'] * d + ['L'] * l
-        return []
+                return pts, gf, ga, mp, w, d, l
 
-    def _extract_goals(self, text: str) -> tuple:
-        gf, ga = None, None
-        gf_m = re.search(r'场均进[球]?\s*(\d+\.?\d*)', text)
-        ga_m = re.search(r'场均(?:失|丢)[球]?\s*(\d+\.?\d*)', text)
-        if gf_m:
-            gf = float(gf_m.group(1))
-        if ga_m:
-            ga = float(ga_m.group(1))
+        except Exception:
+            pass
+        return None, None, None, 0, 0, 0, 0
 
-        if not gf:
-            m = re.search(r'(?:进|打入|攻入)\s*(\d+)\s*球.*?(\d+)\s*场', text)
-            if m:
-                gf = float(m.group(1)) / float(m.group(2))
-        if not ga:
-            m = re.search(r'(?:失|丢)\s*(\d+)\s*球.*?(\d+)\s*场', text)
-            if m:
-                ga = float(m.group(1)) / float(m.group(2))
-        return gf, ga
-
-    def _extract_h2h(self, text: str) -> tuple:
-        wins = draws = losses = 0
-        m = re.search(r'(\d+)\s*胜\s*(\d+)\s*平\s*(\d+)\s*负', text)
-        if m:
-            wins, draws, losses = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return wins, draws, losses
-
-    def _extract_injuries(self, text: str) -> list[str]:
-        injuries = []
-        keywords = ['受伤', '伤病', '缺阵', '缺席', 'injury', 'injured']
-        for kw in keywords:
-            idx = text.lower().find(kw.lower())
-            if idx >= 0:
-                snippet = text[max(0, idx - 50):idx + 100]
-                names = re.findall(r'[一-鿿]{2,4}(?:·[一-鿿]{1,4})?', snippet)
-                for name in names[:3]:
-                    if name not in ['因为', '由于', '目前', '已经', '球队', '赛季']:
-                        injuries.append(name)
-        return injuries[:3]
-
-    def _extract_suspensions(self, text: str) -> list[str]:
-        suspensions = []
-        keywords = ['停赛', '红牌', '黄牌累积', 'suspended', 'suspension']
-        for kw in keywords:
-            idx = text.lower().find(kw.lower())
-            if idx >= 0:
-                snippet = text[max(0, idx - 50):idx + 100]
-                names = re.findall(r'[一-鿿]{2,4}(?:·[一-鿿]{1,4})?', snippet)
-                for name in names[:2]:
-                    if name not in ['因为', '由于', '目前']:
-                        suspensions.append(name)
-        return suspensions[:2]
-
-    def _extract_uefa_coefficient(self, text: str) -> Optional[float]:
-        m = re.search(
-            r'(?:欧(?:战|足联)|UEFA)\s*(?:系数|coefficient|排名|rank)[:\s]*(\d+\.?\d*)',
-            text, re.IGNORECASE
-        )
-        if m:
-            return float(m.group(1))
-        return None
-
-    def _check_in_season(self, text: str) -> bool:
-        off_season = ['休赛期', '赛季结束', '联赛结束', 'offseason', 'season ended']
-        for kw in off_season:
-            if kw.lower() in text.lower():
-                return False
-        return True
-
-    def _extract_market_value(self, text: str) -> Optional[float]:
-        m = re.search(
-            r'(?:身价|市值|market value)[:\s]*(\d+\.?\d*)\s*(?:亿|亿欧|€|M)',
-            text, re.IGNORECASE
-        )
-        if m:
-            val = float(m.group(1))
-            if '亿' in text[m.start():m.end()]:
-                return val * 100
-            return val
-        return None

@@ -47,11 +47,11 @@ async function runPrediction() {
         return;
     }
 
-    // Show loading
+    // Show loading with better status
     btn.disabled = true;
-    btn.textContent = "⏳ 正在分析数据...";
+    btn.textContent = "⏳ 正在联网搜索数据...";
     resultCard.style.display = "block";
-    resultContent.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在搜集球队数据并进行分析...</p></div>';
+    resultContent.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在搜索两队联赛排名、近期战绩、主客场数据...</p><p style="font-size:0.8rem;color:#64748b;margin-top:8px;">搜索维度: 排名 | 战绩 | 攻防 | 交锋 | 伤停 | 身价 | 欧战系数</p></div>';
 
     // Build request
     const data = {
@@ -210,8 +210,8 @@ function renderResult(r) {
             <tbody>${dimRows}</tbody>
         </table>
 
-        <div style="margin-top:12px;font-size:0.75rem;color:#64748b;text-align:right;">
-            数据来源: ${r.search_data_quality}
+        <div style="margin-top:12px;padding:10px 14px;background:rgba(59,130,246,0.08);border-radius:8px;font-size:0.8rem;color:#93c5fd;">
+            📡 ${r.search_data_quality}
         </div>
     `;
 
