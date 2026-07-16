@@ -1,4 +1,5 @@
 // Sports Prediction System - Frontend Logic
+const APP_VERSION = "1.0.2";
 
 const API_URL = "/api/predict";
 
@@ -51,7 +52,7 @@ async function runPrediction() {
     btn.disabled = true;
     btn.textContent = "⏳ 正在联网搜索数据...";
     resultCard.style.display = "block";
-    resultContent.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在搜索两队联赛排名、近期战绩、主客场数据...</p><p style="font-size:0.8rem;color:#64748b;margin-top:8px;">搜索维度: 排名 | 战绩 | 攻防 | 交锋 | 伤停 | 身价 | 欧战系数</p></div>';
+    resultContent.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在搜索两队联赛排名、近期战绩、主客场数据...</p><p style="font-size:0.8rem;color:#64748b;margin-top:8px;">搜索维度: 排名 | 战绩 | 攻防 | 交锋 | 伤停 | 身价 | 欧战系数</p><p style="font-size:0.75rem;color:#f59e0b;margin-top:6px;">注意：首次请求可能需要60秒（服务器冷启动+数据抓取），请耐心等待...</p></div>';
 
     // Build request
     const data = {
@@ -89,12 +90,18 @@ async function runPrediction() {
         odds_draw: parseFloatOrNull("draw-odds"),
     };
 
+    // AbortController for 90-second timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(function() { controller.abort(); }, 90000);
+
     try {
         const resp = await fetch(API_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(data),
+            signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
         if (!resp.ok) {
             const err = await resp.json();
@@ -102,9 +109,25 @@ async function runPrediction() {
         }
 
         const result = await resp.json();
+        console.log("API Response:", result);
+        console.log("dimension_scores:", result.dimension_scores);
+
+        // Verify dimension_scores exist
+        if (!result.dimension_scores || Object.keys(result.dimension_scores).length === 0) {
+            resultContent.innerHTML = '<div class="loading" style="color:#f87171;">❌ API返回了空白的维度得分数据。请检查浏览器控制台 (F12) 查看详情。</div>';
+            btn.disabled = false;
+            btn.textContent = "🔍 开始分析预测";
+            return;
+        }
+
         renderResult(result);
     } catch (e) {
-        resultContent.innerHTML = `<div class="loading" style="color:#f87171;">❌ 预测出错: ${e.message}</div>`;
+        clearTimeout(timeoutId);
+        if (e.name === "AbortError") {
+            resultContent.innerHTML = '<div class="loading" style="color:#f59e0b;">⏰ 请求超时（90秒）。服务器可能正在冷启动，请刷新页面后重试，或等待1-2分钟后再次点击预测按钮。</div>';
+        } else {
+            resultContent.innerHTML = '<div class="loading" style="color:#f87171;">❌ 预测出错: ' + e.message + '</div>';
+        }
     } finally {
         btn.disabled = false;
         btn.textContent = "🔍 开始分析预测";
@@ -213,6 +236,10 @@ function renderResult(r) {
         <div style="margin-top:12px;padding:10px 14px;background:rgba(59,130,246,0.08);border-radius:8px;font-size:0.8rem;color:#93c5fd;">
             📡 ${r.search_data_quality}
         </div>
+        <details style="margin-top:8px;font-size:0.7rem;color:#64748b;">
+            <summary style="cursor:pointer;">🔧 调试信息 (原始维度得分, 版本: ${APP_VERSION})</summary>
+            <pre style="background:rgba(0,0,0,0.3);padding:8px;border-radius:4px;overflow-x:auto;margin-top:4px;">${JSON.stringify(r.dimension_scores, null, 2)}</pre>
+        </details>
     `;
 
     resultCard.scrollIntoView({ behavior: "smooth" });
