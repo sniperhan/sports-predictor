@@ -22,6 +22,244 @@ from bs4 import BeautifulSoup
 from predictor import TeamData
 
 
+# Chinese → English team name mapping for Wikipedia search
+TEAM_NAME_MAP = {
+    # 挪超 (Eliteserien)
+    "瓦勒伦加": "Vålerenga", "瓦勒伦加足球俱乐部": "Vålerenga",
+    "奥勒松": "Aalesund", "奥勒松足球俱乐部": "Aalesund",
+    "博德闪耀": "Bodø/Glimt", "博多格林特": "Bodø/Glimt",
+    "罗森博格": "Rosenborg", "罗森博格足球俱乐部": "Rosenborg",
+    "莫尔德": "Molde", "莫尔德足球俱乐部": "Molde",
+    "维京": "Viking FK", "维京足球俱乐部": "Viking FK",
+    "布兰": "SK Brann", "布兰足球俱乐部": "SK Brann",
+    "利勒斯特伦": "Lillestrøm", "利勒斯特罗姆": "Lillestrøm",
+    "奥德": "Odds BK", "奥德足球俱乐部": "Odds BK",
+    "桑德菲杰": "Sandefjord", "桑讷菲尤尔": "Sandefjord",
+    "斯托姆加斯特": "Strømsgodset", "斯特罗姆加斯特": "Strømsgodset",
+    "萨普斯堡": "Sarpsborg 08", "萨普斯堡08": "Sarpsborg 08",
+    "特罗姆瑟": "Tromsø", "特罗姆瑟足球俱乐部": "Tromsø",
+    "克里斯蒂安松": "Kristiansund", "克里斯蒂安松BK": "Kristiansund",
+    "海于格松": "Haugesund", "海于格松足球俱乐部": "Haugesund",
+    "腓特烈斯塔": "Fredrikstad", "腓特烈斯塔FK": "Fredrikstad",
+    "KFUM奥斯陆": "KFUM Oslo", "奥斯陆KFUM": "KFUM Oslo",
+
+    # 英超 (Premier League)
+    "阿森纳": "Arsenal", "阿仙奴": "Arsenal",
+    "切尔西": "Chelsea", "车路士": "Chelsea",
+    "曼联": "Manchester United", "曼彻斯特联": "Manchester United",
+    "利物浦": "Liverpool",
+    "曼城": "Manchester City", "曼彻斯特城": "Manchester City",
+    "热刺": "Tottenham Hotspur", "托特纳姆热刺": "Tottenham Hotspur",
+    "纽卡斯尔": "Newcastle United", "纽卡斯尔联": "Newcastle United",
+    "布莱顿": "Brighton & Hove Albion",
+    "阿斯顿维拉": "Aston Villa", "维拉": "Aston Villa",
+    "西汉姆联": "West Ham United", "西汉姆": "West Ham United",
+    "埃弗顿": "Everton",
+    "狼队": "Wolverhampton Wanderers", "狼": "Wolverhampton Wanderers",
+    "水晶宫": "Crystal Palace",
+    "富勒姆": "Fulham",
+    "伯恩茅斯": "AFC Bournemouth", "伯恩茅斯足球俱乐部": "AFC Bournemouth",
+    "诺丁汉森林": "Nottingham Forest",
+    "布伦特福德": "Brentford",
+    "南安普敦": "Southampton", "南安普顿": "Southampton",
+    "莱斯特城": "Leicester City", "莱切斯特": "Leicester City",
+    "伊普斯维奇": "Ipswich Town",
+    "利兹联": "Leeds United",
+
+    # 西甲 (La Liga)
+    "巴塞罗那": "FC Barcelona", "巴萨": "FC Barcelona",
+    "皇家马德里": "Real Madrid", "皇马": "Real Madrid",
+    "马德里竞技": "Atlético Madrid", "马竞": "Atlético Madrid",
+    "塞维利亚": "Sevilla",
+    "瓦伦西亚": "Valencia", "巴伦西亚": "Valencia",
+    "比利亚雷亚尔": "Villarreal",
+    "皇家社会": "Real Sociedad",
+    "毕尔巴鄂竞技": "Athletic Bilbao", "毕尔巴鄂": "Athletic Bilbao",
+    "皇家贝蒂斯": "Real Betis", "贝蒂斯": "Real Betis",
+    "赫罗纳": "Girona",
+    "奥萨苏纳": "Osasuna",
+    "塞尔塔": "Celta de Vigo",
+    "西班牙人": "RCD Espanyol",
+    "赫塔费": "Getafe", "赫塔菲": "Getafe",
+    "马略卡": "RCD Mallorca", "马洛卡": "RCD Mallorca",
+    "阿拉维斯": "Alavés",
+    "拉斯帕尔马斯": "UD Las Palmas",
+    "莱加内斯": "CD Leganés",
+    "巴列卡诺": "Rayo Vallecano",
+
+    # 意甲 (Serie A)
+    "尤文图斯": "Juventus",
+    "AC米兰": "AC Milan", "米兰": "AC Milan",
+    "国际米兰": "Inter Milan", "国米": "Inter Milan",
+    "那不勒斯": "Napoli", "拿坡里": "Napoli",
+    "罗马": "AS Roma",
+    "拉齐奥": "Lazio",
+    "亚特兰大": "Atalanta",
+    "佛罗伦萨": "Fiorentina",
+    "都灵": "Torino",
+    "博洛尼亚": "Bologna",
+    "热那亚": "Genoa",
+    "乌迪内斯": "Udinese",
+    "帕尔马": "Parma",
+    "科莫": "Como",
+    "蒙扎": "Monza",
+    "维罗纳": "Hellas Verona",
+    "莱切": "US Lecce",
+    "卡利亚里": "Cagliari",
+    "恩波利": "Empoli",
+    "威尼斯": "Venezia",
+
+    # 德甲 (Bundesliga)
+    "拜仁慕尼黑": "Bayern Munich", "拜仁": "Bayern Munich",
+    "多特蒙德": "Borussia Dortmund",
+    "莱比锡": "RB Leipzig", "RB莱比锡": "RB Leipzig",
+    "勒沃库森": "Bayer Leverkusen",
+    "法兰克福": "Eintracht Frankfurt",
+    "斯图加特": "VfB Stuttgart",
+    "沃尔夫斯堡": "VfL Wolfsburg",
+    "门兴格拉德巴赫": "Borussia Mönchengladbach", "门兴": "Borussia Mönchengladbach",
+    "弗赖堡": "SC Freiburg",
+    "霍芬海姆": "TSG Hoffenheim",
+    "柏林联合": "Union Berlin",
+    "奥格斯堡": "FC Augsburg",
+    "云达不来梅": "Werder Bremen", "不来梅": "Werder Bremen",
+    "海登海姆": "1. FC Heidenheim",
+    "美因茨": "Mainz 05",
+    "圣保利": "FC St. Pauli",
+    "基尔": "Holstein Kiel",
+    "波鸿": "VfL Bochum",
+
+    # 法甲 (Ligue 1)
+    "巴黎圣日耳曼": "Paris Saint-Germain", "巴黎": "Paris Saint-Germain",
+    "马赛": "Olympique de Marseille",
+    "里昂": "Olympique Lyonnais",
+    "摩纳哥": "AS Monaco",
+    "里尔": "Lille OSC",
+    "尼斯": "OGC Nice",
+    "朗斯": "RC Lens",
+    "雷恩": "Stade Rennais",
+    "斯特拉斯堡": "RC Strasbourg",
+    "南特": "FC Nantes",
+    "蒙彼利埃": "Montpellier HSC",
+    "图卢兹": "Toulouse FC",
+    "兰斯": "Stade de Reims",
+    "布雷斯特": "Stade Brestois",
+    "勒阿弗尔": "Le Havre",
+    "欧塞尔": "AJ Auxerre",
+    "圣埃蒂安": "AS Saint-Étienne",
+    "昂热": "Angers SCO",
+
+    # 巴甲 (Campeonato Brasileiro)
+    "弗拉门戈": "Flamengo",
+    "帕尔梅拉斯": "Palmeiras",
+    "桑托斯": "Santos FC",
+    "科林蒂安": "Corinthians",
+    "圣保罗": "São Paulo FC",
+    "格雷米奥": "Grêmio",
+    "巴西国际": "Internacional",
+    "米内罗竞技": "Atlético Mineiro",
+    "弗鲁米嫩塞": "Fluminense",
+    "克鲁塞罗": "Cruzeiro",
+    "博塔弗戈": "Botafogo",
+    "布拉甘蒂诺红牛": "Red Bull Bragantino", "红牛布拉甘蒂诺": "Red Bull Bragantino",
+    "巴伊亚": "Bahia",
+    "福塔莱萨": "Fortaleza",
+    "塞阿拉": "Ceará",
+    "瓦斯科达伽马": "Vasco da Gama",
+    "库亚巴": "Cuiabá",
+    "戈亚尼恩斯竞技": "Atlético Goianiense",
+    "米内罗美洲": "América Mineiro",
+
+    # 美职联 (MLS)
+    "洛杉矶银河": "LA Galaxy",
+    "洛杉矶FC": "Los Angeles FC",
+    "迈阿密国际": "Inter Miami",
+    "纽约城FC": "New York City FC", "纽约城": "New York City FC",
+    "亚特兰大联": "Atlanta United",
+    "西雅图海湾人": "Seattle Sounders FC",
+    "哥伦布机员": "Columbus Crew",
+    "辛辛那提": "FC Cincinnati",
+    "波特兰伐木者": "Portland Timbers",
+    "纳什维尔": "Nashville SC",
+    "奥兰多城": "Orlando City SC",
+    "费城联合": "Philadelphia Union",
+    "新英格兰革命": "New England Revolution",
+    "多伦多FC": "Toronto FC",
+    "芝加哥火焰": "Chicago Fire FC",
+    "休斯顿迪纳摩": "Houston Dynamo FC",
+    "达拉斯FC": "FC Dallas",
+    "皇家盐湖城": "Real Salt Lake",
+    "温哥华白帽": "Vancouver Whitecaps FC",
+    "奥斯汀FC": "Austin FC",
+    "夏洛特FC": "Charlotte FC",
+    "圣路易斯城": "St. Louis City SC",
+
+    # 日职 (J League)
+    "横滨水手": "Yokohama F. Marinos",
+    "川崎前锋": "Kawasaki Frontale",
+    "浦和红钻": "Urawa Red Diamonds",
+    "鹿岛鹿角": "Kashima Antlers",
+    "大阪钢巴": "Gamba Osaka",
+    "广岛三箭": "Sanfrecce Hiroshima",
+    "名古屋鲸八": "Nagoya Grampus",
+    "东京FC": "FC Tokyo",
+    "柏太阳神": "Kashiwa Reysol",
+    "神户胜利船": "Vissel Kobe",
+    "清水心跳": "Shimizu S-Pulse",
+    "大阪樱花": "Cerezo Osaka",
+    "札幌冈萨多": "Hokkaido Consadole Sapporo",
+    "横滨FC": "Yokohama FC",
+    "湘南比马": "Shonan Bellmare",
+    "磐田喜悦": "Júbilo Iwata",
+    "京都不死鸟": "Kyoto Sanga FC",
+    "新潟天鹅": "Albirex Niigata",
+    "福冈黄蜂": "Avispa Fukuoka",
+    "鸟栖砂岩": "Sagan Tosu",
+
+    # 韩K联 (K League)
+    "全北现代": "Jeonbuk Hyundai Motors",
+    "蔚山现代": "Ulsan Hyundai",
+    "首尔FC": "FC Seoul",
+    "浦项制铁": "Pohang Steelers",
+    "水原三星": "Suwon Samsung Bluewings",
+    "大邱FC": "Daegu FC",
+    "仁川联": "Incheon United",
+    "光州FC": "Gwangju FC",
+    "江原FC": "Gangwon FC",
+    "济州联": "Jeju United",
+    "大田市民": "Daejeon Hana Citizen",
+    "水原FC": "Suwon FC",
+
+    # 欧冠/欧联 常用
+    "阿贾克斯": "AFC Ajax",
+    "埃因霍温": "PSV Eindhoven",
+    "费耶诺德": "Feyenoord",
+    "本菲卡": "Benfica",
+    "波尔图": "FC Porto",
+    "葡萄牙体育": "Sporting CP",
+    "加拉塔萨雷": "Galatasaray",
+    "费内巴切": "Fenerbahçe",
+    "贝西克塔斯": "Beşiktaş",
+    "顿涅茨克矿工": "Shakhtar Donetsk",
+    "凯尔特人": "Celtic",
+    "格拉斯哥流浪者": "Rangers",
+    "萨尔茨堡红牛": "Red Bull Salzburg",
+    "布鲁日": "Club Brugge",
+    "安德莱赫特": "Anderlecht",
+    "哥本哈根": "FC Copenhagen",
+    "奥林匹亚科斯": "Olympiacos",
+    "帕纳辛纳科斯": "Panathinaikos",
+    "费伦茨瓦罗斯": "Ferencváros",
+    "贝尔格莱德红星": "Red Star Belgrade",
+    "萨格勒布迪纳摩": "Dinamo Zagreb",
+    "布拉格斯拉维亚": "Slavia Prague",
+    "巴塞尔": "FC Basel",
+    "年轻人": "Young Boys",
+    "马尔默": "Malmö FF",
+    "罗森博格": "Rosenborg",
+    "莫尔德": "Molde",
+}
+
 # Wikipedia league season page names (2025-26 season)
 LEAGUE_TABLES = {
     "英超": "2025%E2%80%9326_Premier_League",
@@ -74,17 +312,35 @@ class DataFetcher:
 
     # ─── Main Entry Point ───────────────────────────────────
 
+    def _translate_name(self, name: str) -> str:
+        """Translate Chinese team name to English for Wikipedia search."""
+        # Direct mapping lookup
+        if name in TEAM_NAME_MAP:
+            return TEAM_NAME_MAP[name]
+        # Try case-insensitive
+        name_lower = name.lower()
+        for cn, en in TEAM_NAME_MAP.items():
+            if cn.lower() == name_lower:
+                return en
+        return name  # Return as-is if no mapping found
+
     def search_team_data(
         self, team_name: str, opponent: str, league: str, is_home: bool
     ) -> TeamData:
         """Fetch comprehensive team data from Wikipedia."""
+        # Translate Chinese names to English for Wikipedia search
+        search_name = self._translate_name(team_name)
+        search_opponent = self._translate_name(opponent)
+
         data = TeamData(name=team_name)
         steps = {}  # Track success/failure of each step
+        if search_name != team_name:
+            steps['translated'] = f'{team_name}->{search_name}'
         season_url = None
 
         # Task 1: Team infobox
         try:
-            result = self._fetch_team_page_raw(team_name, league)
+            result = self._fetch_team_page_raw(search_name, league)
             if result and any(v is not None for v in result):
                 pos, total, s_url = result
                 if pos:
@@ -106,7 +362,7 @@ class DataFetcher:
         # Task 2: League table
         if league in LEAGUE_TABLES:
             try:
-                result = self._fetch_league_table_data_raw(team_name, league)
+                result = self._fetch_league_table_data_raw(search_name, league)
                 if result:
                     pts, gf, ga, matches, wins, draws, losses = result
                     if pts:
@@ -135,7 +391,7 @@ class DataFetcher:
         # Task 3: H2H data
         if is_home:
             try:
-                result = self._fetch_h2h_data(team_name, opponent)
+                result = self._fetch_h2h_data(search_name, search_opponent)
                 if result:
                     w, d, l = result
                     if w > 0 or d > 0 or l > 0:
