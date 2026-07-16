@@ -426,6 +426,18 @@ class DataFetcher:
             except Exception as e:
                 steps['season_page'] = f'error: {e}'
 
+        # Task 5: Injuries & Suspensions
+        try:
+            injuries, suspensions = self.fetch_injuries(search_name)
+            if injuries:
+                data.key_injuries = injuries
+                steps['injuries'] = str(len(injuries))
+            if suspensions:
+                data.key_suspensions = suspensions
+                steps['suspensions'] = str(len(suspensions))
+        except Exception as e:
+            steps['injuries'] = f'error: {e}'
+
         data.in_season = True
         data._steps = steps
         return data
@@ -802,7 +814,81 @@ class DataFetcher:
             pass
         return [], [], []
 
-    # ─── Task 4: H2H from Rivalry Pages ─────────────────────
+    # ─── Task 5: Injuries & Suspensions ─────────────────────
+
+    def fetch_injuries(self, team_name: str) -> tuple:
+        """Fetch injury/suspension data for a team.
+        Returns (injuries_list, suspensions_list).
+        """
+        search_name = self._translate_name(team_name)
+        injuries = []
+        suspensions = []
+
+        try:
+            s = self._make_session()
+            # Search for team's current season page which often lists injuries
+            params = {
+                "action": "query", "list": "search",
+                "srsearch": f"{search_name} 2025-26 season squad injuries",
+                "format": "json", "srlimit": 3,
+            }
+            resp = s.get(self.WIKI_API, params=params, timeout=20)
+            if resp.status_code != 200:
+                return [], []
+
+            results = resp.json().get("query", {}).get("search", [])
+            for r in results:
+                title = r.get("title", "")
+                if "season" not in title.lower() and "squad" not in title.lower():
+                    continue
+
+                page_url = self._wiki_url(title)
+                resp2 = s.get(page_url, timeout=25)
+                if resp2.status_code != 200:
+                    continue
+
+                soup = BeautifulSoup(resp2.text, "html.parser")
+                page_text = soup.get_text().lower()
+
+                # Look for injury-related sections
+                injury_keywords = ["injured", "injury", "out for", "ruled out",
+                                   "unavailable", "absent", "sidelined", "doubt"]
+
+                # Find injury mentions near player names
+                for heading in soup.select("h2, h3, h4"):
+                    heading_text = heading.get_text(strip=True).lower()
+                    if any(kw in heading_text for kw in ["injury", "squad", "player", "absent"]):
+                        # Get the content after this heading
+                        content = []
+                        for sibling in heading.find_next_siblings():
+                            if sibling.name in ("h2", "h3", "h4"):
+                                break
+                            content.append(sibling.get_text())
+
+                        full_text = " ".join(content)
+                        # Look for common injury patterns
+                        for line in full_text.split("."):
+                            line_lower = line.lower()
+                            if any(kw in line_lower for kw in injury_keywords):
+                                # Try to extract player name (capitalized words before injury keyword)
+                                for kw in injury_keywords:
+                                    if kw in line_lower:
+                                        idx = line_lower.index(kw)
+                                        before = line[:idx].strip()
+                                        # Extract the last few words as player name
+                                        name_match = re.findall(r'[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}', before)
+                                        if name_match:
+                                            injuries.append(name_match[-1])
+                                            break
+                        break  # Found injury section
+
+                if injuries:
+                    break  # Got what we needed
+
+        except Exception:
+            pass
+
+        return injuries[:5], suspensions  # Top 5 injuries
 
     def _fetch_h2h_data(self, team1: str, team2: str) -> tuple:
         """Fetch head-to-head data from Wikipedia rivalry pages.

@@ -78,6 +78,17 @@ class PredictionEngine:
         factors = []
         risks = []
 
+        # Auto-calculate fair odds from available data (no external API needed)
+        if not home.odds_win or not away.odds_win or not home.odds_draw:
+            calc_home, calc_draw, calc_away = self._calculate_fair_odds(home, away)
+            if not home.odds_win:
+                home.odds_win = calc_home
+            if not away.odds_win:
+                away.odds_win = calc_away
+            if not home.odds_draw:
+                home.odds_draw = calc_draw
+            factors.append(f"公平赔率: 主{calc_home:.2f} / 平{calc_draw:.2f} / 客{calc_away:.2f}")
+
         # 1. Home/Away Performance (20%)
         ha_score = self._score_home_away(home, away)
         scores["home_away"] = ha_score
@@ -210,6 +221,72 @@ class PredictionEngine:
             dimension_scores={k: round(v, 2) for k, v in scores.items()},
             data_consistency=consistency,
         )
+
+    def _calculate_fair_odds(self, home: TeamData, away: TeamData) -> tuple:
+        """Calculate fair decimal odds (1X2) from available team data.
+        Uses Elo-style rating with league position, points, form, and home advantage.
+        Returns (home_odds, draw_odds, away_odds).
+        """
+        # Build Elo-style rating from available data
+        home_rating = 1500.0
+        away_rating = 1500.0
+
+        # League position factor (0-200 points swing)
+        if home.league_position and away.league_position and home.total_teams:
+            home_pct = (home.total_teams - home.league_position) / max(1, home.total_teams - 1)
+            away_pct = (away.total_teams - away.league_position) / max(1, away.total_teams - 1)
+            home_rating += (home_pct - away_pct) * 200
+
+        # Points factor (each point ~= 5 Elo points)
+        if home.league_points and away.league_points:
+            pt_diff = home.league_points - away.league_points
+            home_rating += pt_diff * 5
+
+        # Recent form factor
+        if home.recent_form:
+            form_pts = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in home.recent_form[:5])
+            home_rating += (form_pts / max(1, len(home.recent_form[:5]) * 3) - 0.45) * 100
+
+        if away.recent_form:
+            form_pts = sum(3 if r == 'W' else 1 if r == 'D' else 0 for r in away.recent_form[:5])
+            away_rating += (form_pts / max(1, len(away.recent_form[:5]) * 3) - 0.45) * 100
+
+        # Market value factor
+        if home.market_value and away.market_value and home.market_value > 0 and away.market_value > 0:
+            ratio = home.market_value / away.market_value
+            import math
+            home_rating += math.log2(ratio) * 50
+
+        # Home advantage (~35 Elo points)
+        home_rating += 35
+
+        # Rating difference
+        rating_diff = home_rating - away_rating
+
+        # Convert to win probability using logistic function
+        win_prob = 1.0 / (1.0 + 10 ** (-rating_diff / 400.0))
+
+        # Draw probability: higher when teams are close
+        rating_gap = abs(rating_diff)
+        draw_prob = max(0.18, 0.32 - rating_gap / 1000.0)
+
+        # Adjust win/loss around draw
+        win_prob = win_prob * (1.0 - draw_prob)
+        loss_prob = (1.0 - win_prob) * (1.0 - draw_prob)
+
+        # Normalize
+        total = win_prob + draw_prob + loss_prob
+        win_prob /= total
+        draw_prob /= total
+        loss_prob /= total
+
+        # Convert probabilities to decimal odds (with 8% margin)
+        margin = 1.08
+        home_odds = round(margin / max(0.05, win_prob), 2)
+        draw_odds = round(margin / max(0.05, draw_prob), 2)
+        away_odds = round(margin / max(0.05, loss_prob), 2)
+
+        return home_odds, draw_odds, away_odds
 
     def _score_home_away(self, home: TeamData, away: TeamData) -> float:
         """Score home/away performance. Returns -1 to 1, positive favors home."""
