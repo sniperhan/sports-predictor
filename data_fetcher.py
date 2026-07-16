@@ -61,12 +61,11 @@ class DataFetcher:
     WIKI_BASE = "https://en.wikipedia.org/wiki/"
 
     def __init__(self):
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
         self._league_table_cache = {}
         self._season_page_cache = {}
 
     def close(self):
-        self._executor.shutdown(wait=False)
+        pass
 
     def _make_session(self):
         s = requests.Session()
@@ -78,40 +77,30 @@ class DataFetcher:
     def search_team_data(
         self, team_name: str, opponent: str, league: str, is_home: bool
     ) -> TeamData:
-        """Fetch comprehensive team data from Wikipedia in parallel."""
+        """Fetch comprehensive team data from Wikipedia."""
         data = TeamData(name=team_name)
         errors = []
-        futures = {}
-
-        # Task 1: Team infobox -> position, total teams, season page URL
-        f1 = self._executor.submit(self._fetch_team_page, team_name, league)
-        futures[f1] = "team_page"
-
-        # Task 2: League table -> points, GF, GA, W, D, L
-        if league in LEAGUE_TABLES:
-            f2 = self._executor.submit(self._fetch_league_table_data, team_name, league)
-            futures[f2] = "league_table"
-
-        # Task 3: H2H data -> wins/draws/losses (only for home team, shared data)
-        if is_home:
-            f3 = self._executor.submit(self._fetch_h2h_data, team_name, opponent)
-            futures[f3] = "h2h"
-
-        # Collect results
         season_url = None
-        for future in concurrent.futures.as_completed(futures):
-            task = futures[future]
+
+        # Task 1: Team infobox
+        try:
+            result = self._fetch_team_page(team_name, league)
+            if result:
+                pos, total, s_url = result
+                if pos:
+                    data.league_position = pos
+                if total:
+                    data.total_teams = total
+                if s_url:
+                    season_url = s_url
+        except Exception as e:
+            errors.append(f"team_page: {e}")
+
+        # Task 2: League table
+        if league in LEAGUE_TABLES:
             try:
-                result = future.result()
-                if task == "team_page" and result:
-                    pos, total, s_url = result
-                    if pos:
-                        data.league_position = pos
-                    if total:
-                        data.total_teams = total
-                    if s_url:
-                        season_url = s_url
-                elif task == "league_table" and result:
+                result = self._fetch_league_table_data(team_name, league)
+                if result:
                     pts, gf, ga, matches, wins, draws, losses = result
                     if pts:
                         data.league_points = pts
@@ -126,16 +115,23 @@ class DataFetcher:
                             d5 = max(0, min(n - w5, round(draws / total_games * n)))
                             l5 = n - w5 - d5
                             data.recent_form = ['W'] * w5 + ['D'] * d5 + ['L'] * l5
-                elif task == "h2h" and result:
+            except Exception as e:
+                errors.append(f"league_table: {e}")
+
+        # Task 3: H2H data
+        if is_home:
+            try:
+                result = self._fetch_h2h_data(team_name, opponent)
+                if result:
                     w, d, l = result
                     if w > 0 or d > 0 or l > 0:
                         data.h2h_wins = w
                         data.h2h_draws = d
                         data.h2h_losses = l
             except Exception as e:
-                errors.append(f"{task}: {e}")
+                errors.append(f"h2h: {e}")
 
-        # Task 3: Team season page -> actual recent results with H/A split
+        # Task 4: Season page for home/away form
         if season_url and not data.home_form:
             try:
                 season_html = self._fetch_season_page(season_url, team_name)
@@ -178,7 +174,7 @@ class DataFetcher:
                 "format": "json",
                 "srlimit": 3,
             }
-            resp = s.get(self.WIKI_API, params=params, timeout=10)
+            resp = s.get(self.WIKI_API, params=params, timeout=20)
             if resp.status_code != 200:
                 return None
             results = resp.json().get("query", {}).get("search", [])
@@ -186,7 +182,7 @@ class DataFetcher:
                 return None
             page_title = results[0]["title"]
             page_url = f"{self.WIKI_BASE}{quote_plus(page_title.replace(' ', '_'))}"
-            resp = s.get(page_url, timeout=10)
+            resp = s.get(page_url, timeout=25)
             if resp.status_code == 200:
                 return resp.text
         except Exception:
@@ -315,7 +311,7 @@ class DataFetcher:
             url = f"{self.WIKI_BASE}{page_name}"
             try:
                 s = self._make_session()
-                resp = s.get(url, timeout=10)
+                resp = s.get(url, timeout=25)
                 if resp.status_code != 200:
                     return None, None, None, 0, 0, 0, 0
                 table_html = resp.text
@@ -432,7 +428,7 @@ class DataFetcher:
                 url = f"{self.WIKI_BASE}{season_url}"
 
             s = self._make_session()
-            resp = s.get(url, timeout=10)
+            resp = s.get(url, timeout=25)
             if resp.status_code == 200:
                 self._season_page_cache[season_url] = resp.text
                 return resp.text
@@ -552,7 +548,7 @@ class DataFetcher:
                     "action": "query", "list": "search",
                     "srsearch": term, "format": "json", "srlimit": 5,
                 }
-                resp = s.get(self.WIKI_API, params=params, timeout=10)
+                resp = s.get(self.WIKI_API, params=params, timeout=25)
                 if resp.status_code != 200:
                     continue
                 results = resp.json().get("query", {}).get("search", [])
@@ -562,7 +558,7 @@ class DataFetcher:
                     title = r.get("title", "")
                     if is_good_match(title.lower(), t1_parts_all, t2_parts_all):
                         page_url = self._wiki_url(title)
-                        resp2 = s.get(page_url, timeout=10)
+                        resp2 = s.get(page_url, timeout=25)
                         if resp2.status_code == 200:
                             return resp2.text
 
@@ -575,7 +571,7 @@ class DataFetcher:
                     ])
                     if is_rivalry:
                         page_url = self._wiki_url(r["title"])
-                        resp2 = s.get(page_url, timeout=10)
+                        resp2 = s.get(page_url, timeout=25)
                         if resp2.status_code == 200:
                             return resp2.text
 

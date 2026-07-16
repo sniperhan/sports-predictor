@@ -222,6 +222,8 @@ async def predict(req: MatchRequest):
                     req.away_team, req.home_team, req.league, False
                 ),
             )
+            # Collect any errors from data fetching
+            fetch_errors = getattr(home_data, '_errors', []) + getattr(away_data, '_errors', [])
             fetcher.close()
 
             # Merge fetched data for HOME team (don't override user-provided data)
@@ -312,11 +314,13 @@ async def predict(req: MatchRequest):
                 data_quality = f"联网获取 {total_fields} 项数据 (主: {', '.join(fetched_home_fields[:3])}... | 客: {', '.join(fetched_away_fields[:3])}...)"
             elif total_fields > 0:
                 data_quality = f"联网获取 {total_fields} 项数据"
+            elif fetch_errors:
+                data_quality = f"联网搜索失败: {'; '.join(fetch_errors[:3])}"
             else:
                 data_quality = "联网搜索未获取到有效数据，使用用户手动输入"
 
         except Exception as e:
-            data_quality = f"联网搜索失败，使用手动数据 (错误: {str(e)[:40]})"
+            data_quality = f"联网搜索失败，使用手动数据 (错误: {str(e)[:80]})"
 
         # Run prediction
         result = engine.analyze(home, away, req.league, req.handicap or "")
