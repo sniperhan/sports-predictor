@@ -224,18 +224,16 @@ async def predict(req: MatchRequest):
             fetcher = DataFetcher()
             loop = asyncio.get_running_loop()
 
-            # Run both searches in parallel for speed
-            home_data, away_data = await asyncio.gather(
-                loop.run_in_executor(
-                    executor,
-                    fetcher.search_team_data,
-                    req.home_team, req.away_team, req.league, True
-                ),
-                loop.run_in_executor(
-                    executor,
-                    fetcher.search_team_data,
-                    req.away_team, req.home_team, req.league, False
-                ),
+            # Run sequentially to avoid threading issues on Render free tier
+            home_data = await loop.run_in_executor(
+                executor,
+                fetcher.search_team_data,
+                req.home_team, req.away_team, req.league, True
+            )
+            away_data = await loop.run_in_executor(
+                executor,
+                fetcher.search_team_data,
+                req.away_team, req.home_team, req.league, False
             )
             # Collect diagnostic info from data fetching
             home_steps = getattr(home_data, '_steps', {})
