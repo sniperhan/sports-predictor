@@ -123,6 +123,9 @@ class DataFetcher:
         # Parse market value
         data.market_value = self._extract_market_value(text)
 
+        # Parse UEFA coefficient
+        data.uefa_coefficient = self._extract_uefa_coefficient(text)
+
     def _extract_position(self, text: str) -> Optional[int]:
         patterns = [
             r'排名(?:第)?\s*(\d+)',
@@ -244,6 +247,15 @@ class DataFetcher:
                     if name not in ['因为', '由于', '目前']:
                         suspensions.append(name)
         return suspensions[:2]
+
+    def _extract_uefa_coefficient(self, text: str) -> Optional[float]:
+        m = re.search(
+            r'(?:欧(?:战|足联)|UEFA)\s*(?:系数|coefficient|排名|rank)[:\s]*(\d+\.?\d*)',
+            text, re.IGNORECASE
+        )
+        if m:
+            return float(m.group(1))
+        return None
 
     def _check_in_season(self, text: str) -> bool:
         off_season = ['休赛期', '赛季结束', '联赛结束', 'offseason', 'season ended']

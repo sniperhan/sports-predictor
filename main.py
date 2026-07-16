@@ -56,6 +56,10 @@ class MatchRequest(BaseModel):
     home_in_season: Optional[bool] = True
     away_in_season: Optional[bool] = True
     total_teams: Optional[int] = None
+    home_market_value: Optional[float] = None
+    away_market_value: Optional[float] = None
+    home_uefa_coefficient: Optional[float] = None
+    away_uefa_coefficient: Optional[float] = None
 
 
 class PredictionResponse(BaseModel):
@@ -98,6 +102,8 @@ async def predict(req: MatchRequest):
             key_injuries=[s.strip() for s in req.home_injuries.split(",") if s.strip()],
             key_suspensions=[s.strip() for s in req.home_suspensions.split(",") if s.strip()],
             in_season=req.home_in_season,
+            market_value=req.home_market_value,
+            uefa_coefficient=req.home_uefa_coefficient,
         )
 
         away = TeamData(
@@ -110,6 +116,8 @@ async def predict(req: MatchRequest):
             key_injuries=[s.strip() for s in req.away_injuries.split(",") if s.strip()],
             key_suspensions=[s.strip() for s in req.away_suspensions.split(",") if s.strip()],
             in_season=req.away_in_season,
+            market_value=req.away_market_value,
+            uefa_coefficient=req.away_uefa_coefficient,
         )
 
         # Parse form strings
@@ -164,6 +172,10 @@ async def predict(req: MatchRequest):
                     home.key_injuries = home_data.key_injuries
                 if not home.key_suspensions:
                     home.key_suspensions = home_data.key_suspensions
+                if not home.market_value:
+                    home.market_value = home_data.market_value
+                if not home.uefa_coefficient:
+                    home.uefa_coefficient = home_data.uefa_coefficient
                 if home.h2h_wins == 0 and home.h2h_losses == 0:
                     home.h2h_wins = home_data.h2h_wins
                     home.h2h_draws = home_data.h2h_draws
@@ -185,6 +197,10 @@ async def predict(req: MatchRequest):
                     away.key_injuries = away_data.key_injuries
                 if not away.key_suspensions:
                     away.key_suspensions = away_data.key_suspensions
+                if not away.market_value:
+                    away.market_value = away_data.market_value
+                if not away.uefa_coefficient:
+                    away.uefa_coefficient = away_data.uefa_coefficient
 
                 fetcher.close()
                 data_quality = "联网搜索完成"

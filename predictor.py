@@ -62,13 +62,14 @@ class PredictionEngine:
 
     # Weights calibrated from real prediction results
     WEIGHTS = {
-        "home_away": 0.22,      # Home/away performance split
-        "recent_form": 0.20,    # Last 5-10 matches
-        "h2h": 0.15,            # Head-to-head record
-        "league_position": 0.13, # League standing
-        "goals_data": 0.10,     # GF/GA differential
-        "injuries": 0.12,       # Key absences
-        "match_fitness": 0.08,  # In-season vs off-season
+        "home_away": 0.20,       # Home/away performance split
+        "recent_form": 0.18,     # Last 5-10 matches
+        "h2h": 0.13,             # Head-to-head record
+        "league_position": 0.12, # League standing
+        "team_strength": 0.10,   # Market value + UEFA coefficient
+        "goals_data": 0.09,      # GF/GA differential
+        "injuries": 0.11,        # Key absences
+        "match_fitness": 0.07,   # In-season vs off-season
     }
 
     def analyze(self, home: TeamData, away: TeamData, league: str, handicap: str = "") -> PredictionResult:
@@ -111,13 +112,21 @@ class PredictionEngine:
         if home.league_position and away.league_position:
             factors.append(f"联赛排名: 主#{home.league_position} vs 客#{away.league_position}")
 
-        # 5. Goals Data (10%)
+        # 5. Team Strength - Market Value & UEFA Coefficient (10%)
+        ts_score = self._score_team_strength(home, away)
+        scores["team_strength"] = ts_score
+        if home.market_value and away.market_value:
+            factors.append(f"球队身价: 主{home.market_value:.0f}M vs 客{away.market_value:.0f}M")
+        if home.uefa_coefficient and away.uefa_coefficient:
+            factors.append(f"欧战系数: 主{home.uefa_coefficient:.1f} vs 客{away.uefa_coefficient:.1f}")
+
+        # 6. Goals Data (9%)
         gd_score = self._score_goals(home, away)
         scores["goals_data"] = gd_score
         if home.goals_for and away.goals_against:
             factors.append(f"主队场均进{home.goals_for:.1f}球 | 客队场均失{away.goals_against:.1f}球")
 
-        # 6. Injuries/Suspensions (12%)
+        # 7. Injuries/Suspensions (11%)
         inj_score = self._score_injuries(home, away)
         scores["injuries"] = inj_score
         if home.key_injuries or home.key_suspensions:
@@ -125,7 +134,7 @@ class PredictionEngine:
         if away.key_injuries or away.key_suspensions:
             factors.append(f"客队缺阵: {', '.join(away.key_injuries + away.key_suspensions)}")
 
-        # 7. Match Fitness (8%)
+        # 8. Match Fitness (7%)
         mf_score = self._score_match_fitness(home, away)
         scores["match_fitness"] = mf_score
         if not home.in_season:
@@ -258,6 +267,30 @@ class PredictionEngine:
 
         diff = away_norm - home_norm  # positive = home better
         return max(-1.0, min(1.0, diff * 1.5))
+
+    def _score_team_strength(self, home: TeamData, away: TeamData) -> float:
+        """Score team strength based on market value and UEFA coefficient."""
+        score = 0.0
+        components = 0
+
+        # Market value comparison (log-scale to handle huge disparities)
+        if home.market_value and away.market_value and home.market_value > 0 and away.market_value > 0:
+            ratio = home.market_value / away.market_value
+            # log2: ratio of 2.0 → 1.0 advantage, ratio of 0.5 → -1.0
+            log_ratio = math.log2(ratio)
+            score += max(-1.0, min(1.0, log_ratio * 0.3))
+            components += 1
+
+        # UEFA coefficient comparison
+        if home.uefa_coefficient and away.uefa_coefficient and home.uefa_coefficient > 0 and away.uefa_coefficient > 0:
+            diff = home.uefa_coefficient - away.uefa_coefficient
+            # Normalize: ~20 points diff = full 1.0 advantage
+            score += max(-1.0, min(1.0, diff / 20.0))
+            components += 1
+
+        if components == 0:
+            return 0.0
+        return max(-1.0, min(1.0, score / components))
 
     def _score_goals(self, home: TeamData, away: TeamData) -> float:
         """Score goal differential and offensive/defensive quality."""

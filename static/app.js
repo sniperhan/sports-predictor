@@ -82,6 +82,10 @@ async function runPrediction() {
         away_suspensions: document.getElementById("away-suspensions").value || "",
         home_in_season: document.getElementById("home-season").value === "in",
         away_in_season: document.getElementById("away-season").value === "in",
+        home_market_value: parseFloatOrNull("home-market-value"),
+        away_market_value: parseFloatOrNull("away-market-value"),
+        home_uefa_coefficient: parseFloatOrNull("home-uefa"),
+        away_uefa_coefficient: parseFloatOrNull("away-uefa"),
     };
 
     try {
@@ -117,23 +121,38 @@ function renderResult(r) {
     // Dimension score bars
     const dimLabels = {
         home_away: "主客场", recent_form: "近期状态", h2h: "历史交锋",
-        league_position: "联赛排名", goals_data: "攻防数据",
-        injuries: "伤病停赛", match_fitness: "比赛状态",
+        league_position: "联赛排名", team_strength: "球队实力",
+        goals_data: "攻防数据", injuries: "伤病停赛",
+        match_fitness: "比赛状态",
     };
 
     let dimRows = "";
     for (const [key, val] of Object.entries(r.dimension_scores)) {
         const label = dimLabels[key] || key;
-        const pct = Math.abs(val) * 100;
-        const positive = val > 0;
-        const barClass = positive ? "positive" : "negative";
+        const absVal = Math.abs(val);
+        const pct = absVal * 100;
+        const positive = val > 0.02;
+        const negative = val < -0.02;
+        const neutral = !positive && !negative;
+        const barClass = positive ? "positive" : (negative ? "negative" : "neutral");
         const barStyle = `width:${Math.min(pct, 100)}%`;
-        const side = positive ? "← 主优" : "客优 →";
+        let side, sideColor;
+        if (neutral) {
+            side = "-- 无数据";
+            sideColor = "#64748b";
+        } else if (positive) {
+            side = "← 主优";
+            sideColor = "#4ade80";
+        } else {
+            side = "客优 →";
+            sideColor = "#f87171";
+        }
+        const scoreText = neutral ? "" : ` (${(val >= 0 ? "+" : "") + val.toFixed(2)})`;
         dimRows += `
             <tr>
-                <td>${label}</td>
+                <td>${label}${scoreText}</td>
                 <td><span class="dim-bar-track"><span class="dim-bar-fill ${barClass}" style="${barStyle}"></span></span></td>
-                <td style="font-size:0.75rem;color:${positive ? '#4ade80' : '#f87171'}">${side}</td>
+                <td style="font-size:0.75rem;color:${sideColor}">${side}</td>
             </tr>`;
     }
 
