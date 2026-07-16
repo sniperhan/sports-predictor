@@ -79,44 +79,58 @@ class DataFetcher:
     ) -> TeamData:
         """Fetch comprehensive team data from Wikipedia."""
         data = TeamData(name=team_name)
-        errors = []
+        steps = {}  # Track success/failure of each step
         season_url = None
 
         # Task 1: Team infobox
         try:
-            result = self._fetch_team_page(team_name, league)
-            if result:
+            result = self._fetch_team_page_raw(team_name, league)
+            if result and any(v is not None for v in result):
                 pos, total, s_url = result
                 if pos:
                     data.league_position = pos
+                    steps['pos'] = str(pos)
                 if total:
                     data.total_teams = total
+                    steps['total'] = str(total)
                 if s_url:
                     season_url = s_url
+                    steps['season_url'] = 'found'
+                else:
+                    steps['season_url'] = 'none'
+            else:
+                steps['team_page'] = 'no_result'
         except Exception as e:
-            errors.append(f"team_page: {e}")
+            steps['team_page'] = f'error: {str(e)[:50]}'
 
         # Task 2: League table
         if league in LEAGUE_TABLES:
             try:
-                result = self._fetch_league_table_data(team_name, league)
+                result = self._fetch_league_table_data_raw(team_name, league)
                 if result:
                     pts, gf, ga, matches, wins, draws, losses = result
                     if pts:
                         data.league_points = pts
+                        steps['pts'] = str(pts)
                     if gf is not None and ga is not None and matches > 0:
                         data.goals_for = round(gf / matches, 1)
                         data.goals_against = round(ga / matches, 1)
+                        steps['goals'] = f'{data.goals_for}/{data.goals_against}'
                     if wins or draws or losses:
                         total_games = wins + draws + losses
                         if total_games >= 5:
+                            steps['wlr'] = f'{wins}W{draws}D{losses}L'
                             n = 5
                             w5 = max(0, min(n, round(wins / total_games * n)))
                             d5 = max(0, min(n - w5, round(draws / total_games * n)))
                             l5 = n - w5 - d5
                             data.recent_form = ['W'] * w5 + ['D'] * d5 + ['L'] * l5
+                else:
+                    steps['league_table'] = 'no_result'
             except Exception as e:
-                errors.append(f"league_table: {e}")
+                steps['league_table'] = f'error: {e}'
+        else:
+            steps['league_table'] = f'no_mapping for {league}'
 
         # Task 3: H2H data
         if is_home:
@@ -128,8 +142,13 @@ class DataFetcher:
                         data.h2h_wins = w
                         data.h2h_draws = d
                         data.h2h_losses = l
+                        steps['h2h'] = f'{w}W{d}D{l}L'
+                    else:
+                        steps['h2h'] = 'all_zero'
+                else:
+                    steps['h2h'] = 'no_result'
             except Exception as e:
-                errors.append(f"h2h: {e}")
+                steps['h2h'] = f'error: {e}'
 
         # Task 4: Season page for home/away form
         if season_url and not data.home_form:
@@ -139,16 +158,45 @@ class DataFetcher:
                     home_form, away_form, recent_form = self._parse_results_by_round(season_html)
                     if home_form:
                         data.home_form = home_form
+                        steps['home_form'] = ','.join(home_form[-5:])
                     if away_form:
                         data.away_form = away_form
+                        steps['away_form'] = ','.join(away_form[-5:])
                     if recent_form:
                         data.recent_form = recent_form
+                        steps['recent_form'] = ','.join(recent_form[-5:])
+                else:
+                    steps['season_html'] = 'empty'
             except Exception as e:
-                errors.append(f"season_page: {e}")
+                steps['season_page'] = f'error: {e}'
 
         data.in_season = True
-        data._errors = errors
+        data._steps = steps
         return data
+
+    def _fetch_team_page_raw(self, team_name: str, user_league: str) -> tuple:
+        """Fetch team page - raises exceptions instead of swallowing them."""
+        html = self._fetch_wikipedia_page(team_name)
+        if not html:
+            return None
+        return self._parse_wikipedia_infobox(html, user_league)
+
+    def _fetch_league_table_data_raw(self, team_name: str, league: str) -> tuple:
+        """Fetch league table - raises exceptions instead of swallowing them."""
+        if league not in LEAGUE_TABLES:
+            return None
+        if league in self._league_table_cache:
+            table_html = self._league_table_cache[league]
+        else:
+            page_name = LEAGUE_TABLES[league]
+            url = f"{self.WIKI_BASE}{page_name}"
+            s = self._make_session()
+            resp = s.get(url, timeout=25)
+            if resp.status_code != 200:
+                return None
+            table_html = resp.text
+            self._league_table_cache[league] = table_html
+        return self._parse_league_table(table_html, team_name)
 
     # ─── Task 1: Team Page + Infobox ─────────────────────────
 
@@ -164,29 +212,27 @@ class DataFetcher:
         return pos, total, season_url
 
     def _fetch_wikipedia_page(self, team_name: str) -> Optional[str]:
-        """Search Wikipedia for a team page and return its HTML."""
-        try:
-            s = self._make_session()
-            params = {
-                "action": "query",
-                "list": "search",
-                "srsearch": f"{team_name} football club",
-                "format": "json",
-                "srlimit": 3,
-            }
-            resp = s.get(self.WIKI_API, params=params, timeout=20)
-            if resp.status_code != 200:
-                return None
-            results = resp.json().get("query", {}).get("search", [])
-            if not results:
-                return None
-            page_title = results[0]["title"]
-            page_url = f"{self.WIKI_BASE}{quote_plus(page_title.replace(' ', '_'))}"
-            resp = s.get(page_url, timeout=25)
-            if resp.status_code == 200:
-                return resp.text
-        except Exception:
-            pass
+        """Search Wikipedia for a team page and return its HTML.
+        Returns None if page not found, raises on network errors."""
+        s = self._make_session()
+        params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": f"{team_name} football club",
+            "format": "json",
+            "srlimit": 3,
+        }
+        resp = s.get(self.WIKI_API, params=params, timeout=20)
+        if resp.status_code != 200:
+            return None
+        results = resp.json().get("query", {}).get("search", [])
+        if not results:
+            return None
+        page_title = results[0]["title"]
+        page_url = f"{self.WIKI_BASE}{quote_plus(page_title.replace(' ', '_'))}"
+        resp = s.get(page_url, timeout=25)
+        if resp.status_code == 200:
+            return resp.text
         return None
 
     def _parse_wikipedia_infobox(self, html: str, user_league: str) -> tuple:

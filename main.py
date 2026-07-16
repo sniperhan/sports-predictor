@@ -148,6 +148,21 @@ async def debug_wikipedia():
     return results
 
 
+def _format_steps(steps: dict) -> str:
+    """Format diagnostic steps into a short string."""
+    parts = []
+    for k, v in steps.items():
+        if v and v != 'none' and v != 'no_result' and v != 'empty' and v != 'all_zero':
+            parts.append(f"{k}={v}")
+    if not parts:
+        # Show failed steps
+        failed = [k for k, v in steps.items() if v in ('no_result', 'empty', 'all_zero', 'none') or str(v).startswith('error')]
+        if failed:
+            return f"failed: {','.join(failed)}"
+        return f"steps: {len(steps)}"
+    return '; '.join(parts[:4])
+
+
 @app.post("/api/predict", response_model=PredictionResponse)
 async def predict(req: MatchRequest):
     try:
@@ -222,8 +237,9 @@ async def predict(req: MatchRequest):
                     req.away_team, req.home_team, req.league, False
                 ),
             )
-            # Collect any errors from data fetching
-            fetch_errors = getattr(home_data, '_errors', []) + getattr(away_data, '_errors', [])
+            # Collect diagnostic info from data fetching
+            home_steps = getattr(home_data, '_steps', {})
+            away_steps = getattr(away_data, '_steps', {})
             fetcher.close()
 
             # Merge fetched data for HOME team (don't override user-provided data)
@@ -314,10 +330,17 @@ async def predict(req: MatchRequest):
                 data_quality = f"联网获取 {total_fields} 项数据 (主: {', '.join(fetched_home_fields[:3])}... | 客: {', '.join(fetched_away_fields[:3])}...)"
             elif total_fields > 0:
                 data_quality = f"联网获取 {total_fields} 项数据"
-            elif fetch_errors:
-                data_quality = f"联网搜索失败: {'; '.join(fetch_errors[:3])}"
             else:
-                data_quality = "联网搜索未获取到有效数据，使用用户手动输入"
+                # Show diagnostic info
+                diag_parts = []
+                if home_steps:
+                    diag_parts.append(f"主队: {_format_steps(home_steps)}")
+                if away_steps:
+                    diag_parts.append(f"客队: {_format_steps(away_steps)}")
+                if diag_parts:
+                    data_quality = f"搜索诊断: {' | '.join(diag_parts)}"
+                else:
+                    data_quality = "联网搜索未获取到有效数据，使用用户手动输入"
 
         except Exception as e:
             data_quality = f"联网搜索失败，使用手动数据 (错误: {str(e)[:80]})"
