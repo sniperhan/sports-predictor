@@ -80,6 +80,7 @@ class DataFetcher:
     ) -> TeamData:
         """Fetch comprehensive team data from Wikipedia in parallel."""
         data = TeamData(name=team_name)
+        errors = []
         futures = {}
 
         # Task 1: Team infobox -> position, total teams, season page URL
@@ -131,22 +132,26 @@ class DataFetcher:
                         data.h2h_wins = w
                         data.h2h_draws = d
                         data.h2h_losses = l
-            except Exception:
-                pass
+            except Exception as e:
+                errors.append(f"{task}: {e}")
 
         # Task 3: Team season page -> actual recent results with H/A split
         if season_url and not data.home_form:
-            season_html = self._fetch_season_page(season_url, team_name)
-            if season_html:
-                home_form, away_form, recent_form = self._parse_results_by_round(season_html)
-                if home_form:
-                    data.home_form = home_form
-                if away_form:
-                    data.away_form = away_form
-                if recent_form:
-                    data.recent_form = recent_form  # Override estimated form with actual
+            try:
+                season_html = self._fetch_season_page(season_url, team_name)
+                if season_html:
+                    home_form, away_form, recent_form = self._parse_results_by_round(season_html)
+                    if home_form:
+                        data.home_form = home_form
+                    if away_form:
+                        data.away_form = away_form
+                    if recent_form:
+                        data.recent_form = recent_form
+            except Exception as e:
+                errors.append(f"season_page: {e}")
 
         data.in_season = True
+        data._errors = errors
         return data
 
     # ─── Task 1: Team Page + Infobox ─────────────────────────

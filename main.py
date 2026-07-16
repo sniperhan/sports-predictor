@@ -89,6 +89,65 @@ async def root():
     return FileResponse("static/index.html")
 
 
+@app.get("/api/debug")
+async def debug_wikipedia():
+    """Test Wikipedia connectivity from Render server."""
+    import requests as req
+    results = {}
+    session = req.Session()
+    session.headers["User-Agent"] = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    )
+
+    # Test 1: Wikipedia API
+    try:
+        r = session.get("https://en.wikipedia.org/w/api.php", params={
+            "action": "query", "list": "search",
+            "srsearch": "Arsenal F.C.", "format": "json", "srlimit": 1
+        }, timeout=15)
+        results["wikipedia_api"] = f"HTTP {r.status_code}, {len(r.text)} bytes"
+        if r.status_code == 200:
+            data = r.json()
+            results["wikipedia_api_parsed"] = str(data.get("query", {}).get("search", [[]])[0:1])[:150]
+    except Exception as e:
+        results["wikipedia_api"] = f"ERROR: {e}"
+
+    # Test 2: Wikipedia main page
+    try:
+        r = session.get("https://en.wikipedia.org/wiki/Arsenal_F.C.", timeout=15)
+        results["wikipedia_page"] = f"HTTP {r.status_code}, {len(r.text)} bytes"
+    except Exception as e:
+        results["wikipedia_page"] = f"ERROR: {e}"
+
+    # Test 3: League table page
+    try:
+        r = session.get("https://en.wikipedia.org/wiki/2025%E2%80%9326_Premier_League", timeout=15)
+        results["league_table"] = f"HTTP {r.status_code}, {len(r.text)} bytes"
+    except Exception as e:
+        results["league_table"] = f"ERROR: {e}"
+
+    # Test 4: DNS resolution
+    import socket
+    try:
+        ip = socket.gethostbyname("en.wikipedia.org")
+        results["dns"] = f"en.wikipedia.org -> {ip}"
+    except Exception as e:
+        results["dns"] = f"ERROR: {e}"
+
+    # Test 5: Try with urllib
+    try:
+        import urllib.request
+        r2 = urllib.request.urlopen("https://en.wikipedia.org/wiki/Arsenal_F.C.", timeout=15)
+        results["urllib_wikipedia"] = f"HTTP {r2.status}, {len(r2.read())} bytes"
+    except Exception as e:
+        results["urllib_wikipedia"] = f"ERROR: {e}"
+
+    session.close()
+    return results
+
+
 @app.post("/api/predict", response_model=PredictionResponse)
 async def predict(req: MatchRequest):
     try:
