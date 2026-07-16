@@ -132,8 +132,8 @@ function renderResult(r) {
         const label = dimLabels[key] || key;
         const absVal = Math.abs(val);
         const pct = absVal * 100;
-        const positive = val > 0.02;
-        const negative = val < -0.02;
+        const positive = val > 0.005;
+        const negative = val < -0.005;
         const neutral = !positive && !negative;
         const barClass = positive ? "positive" : (negative ? "negative" : "neutral");
         const barStyle = `width:${Math.min(pct, 100)}%`;
