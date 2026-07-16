@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>体育彩票AI预测系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <h1>⚽ 体育彩票 AI 预测系统</h1>
+            <p class="subtitle">基于多维数据分析的智能预测引擎 | 胜平负 · 让球 · 比分</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Input Form -->
+            <section class="card form-card">
+                <h2>📋 比赛信息</h2>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>联赛</label>
+                        <select id="league" onchange="onLeagueChange()">
+                            <option value="">-- 选择联赛 --</option>
+                            <option value="挪超">挪超 (Eliteserien)</option>
+                            <option value="巴甲">巴甲 (Brasileirão)</option>
+                            <option value="美职联">美职联 (MLS)</option>
+                            <option value="英超">英超 (Premier League)</option>
+                            <option value="西甲">西甲 (La Liga)</option>
+                            <option value="意甲">意甲 (Serie A)</option>
+                            <option value="德甲">德甲 (Bundesliga)</option>
+                            <option value="法甲">法甲 (Ligue 1)</option>
+                            <option value="欧冠">欧冠 (Champions League)</option>
+                            <option value="世界杯">世界杯 (World Cup)</option>
+                            <option value="日职">日职 (J League)</option>
+                            <option value="韩K联">韩K联 (K League)</option>
+                            <option value="其他">其他联赛</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>比赛日期</label>
+                        <input type="date" id="match-date">
+                    </div>
+                    <div class="form-group">
+                        <label>主队名称</label>
+                        <input type="text" id="home-team" placeholder="例如：瓦勒伦加">
+                    </div>
+                    <div class="form-group">
+                        <label>客队名称</label>
+                        <input type="text" id="away-team" placeholder="例如：奥勒松">
+                    </div>
+                    <div class="form-group">
+                        <label>让球盘口（可选）</label>
+                        <select id="handicap">
+                            <option value="">-- 不确定 --</option>
+                            <option value="home-0.25">主让0.25球</option>
+                            <option value="home-0.5">主让0.5球</option>
+                            <option value="home-0.75">主让0.75球</option>
+                            <option value="home-1">主让1球</option>
+                            <option value="home-1.25">主让1.25球</option>
+                            <option value="home-1.5">主让1.5球</option>
+                            <option value="away-0.25">客让0.25球</option>
+                            <option value="away-0.5">客让0.5球</option>
+                            <option value="away-0.75">客让0.75球</option>
+                            <option value="away-1">客让1球</option>
+                            <option value="draw">平手盘</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Advanced Data -->
+                <details class="advanced-toggle">
+                    <summary>📊 手动输入详细数据（可选，不填则自动联网搜索）</summary>
+                    <div class="advanced-data">
+                        <h3>联赛数据</h3>
+                        <div class="form-grid form-grid-3">
+                            <div class="form-group">
+                                <label>主队排名</label>
+                                <input type="number" id="home-pos" placeholder="第几名">
+                            </div>
+                            <div class="form-group">
+                                <label>客队排名</label>
+                                <input type="number" id="away-pos" placeholder="第几名">
+                            </div>
+                            <div class="form-group">
+                                <label>联赛总球队数</label>
+                                <input type="number" id="total-teams" placeholder="如16">
+                            </div>
+                        </div>
+
+                        <h3>近期战绩</h3>
+                        <div class="form-grid form-grid-2">
+                            <div class="form-group">
+                                <label>主队近5场 (W/D/L,逗号分隔)</label>
+                                <input type="text" id="home-form" placeholder="W,W,D,L,W">
+                            </div>
+                            <div class="form-group">
+                                <label>客队近5场 (W/D/L,逗号分隔)</label>
+                                <input type="text" id="away-form" placeholder="L,D,W,L,L">
+                            </div>
+                            <div class="form-group">
+                                <label>主队主场近5场</label>
+                                <input type="text" id="home-home-form" placeholder="W,W,W,D,W">
+                            </div>
+                            <div class="form-group">
+                                <label>客队客场近5场</label>
+                                <input type="text" id="away-away-form" placeholder="L,L,D,L,L">
+                            </div>
+                        </div>
+
+                        <h3>进球数据（场均）</h3>
+                        <div class="form-grid form-grid-4">
+                            <div class="form-group">
+                                <label>主队场均进球</label>
+                                <input type="number" step="0.1" id="home-gf" placeholder="如1.8">
+                            </div>
+                            <div class="form-group">
+                                <label>主队场均失球</label>
+                                <input type="number" step="0.1" id="home-ga" placeholder="如1.2">
+                            </div>
+                            <div class="form-group">
+                                <label>客队场均进球</label>
+                                <input type="number" step="0.1" id="away-gf" placeholder="如1.4">
+                            </div>
+                            <div class="form-group">
+                                <label>客队场均失球</label>
+                                <input type="number" step="0.1" id="away-ga" placeholder="如1.6">
+                            </div>
+                        </div>
+
+                        <h3>历史交锋</h3>
+                        <div class="form-grid form-grid-4">
+                            <div class="form-group">
+                                <label>主队胜</label>
+                                <input type="number" id="h2h-home-wins" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label>平局</label>
+                                <input type="number" id="h2h-draws" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label>客队胜</label>
+                                <input type="number" id="h2h-away-wins" value="0">
+                            </div>
+                            <div class="form-group">
+                                <label>总交锋次数</label>
+                                <input type="number" id="h2h-total" value="0" readonly>
+                            </div>
+                        </div>
+
+                        <h3>伤停情况</h3>
+                        <div class="form-grid form-grid-2">
+                            <div class="form-group">
+                                <label>主队伤停（逗号分隔）</label>
+                                <input type="text" id="home-injuries" placeholder="球员A, 球员B">
+                            </div>
+                            <div class="form-group">
+                                <label>客队伤停（逗号分隔）</label>
+                                <input type="text" id="away-injuries" placeholder="球员C, 球员D">
+                            </div>
+                            <div class="form-group">
+                                <label>主队停赛（逗号分隔）</label>
+                                <input type="text" id="home-suspensions" placeholder="球员E">
+                            </div>
+                            <div class="form-group">
+                                <label>客队停赛（逗号分隔）</label>
+                                <input type="text" id="away-suspensions" placeholder="球员F">
+                            </div>
+                        </div>
+
+                        <h3>赛季状态</h3>
+                        <div class="form-grid form-grid-2">
+                            <div class="form-group">
+                                <label>主队赛季状态</label>
+                                <select id="home-season">
+                                    <option value="in">赛季进行中</option>
+                                    <option value="off">休赛期</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>客队赛季状态</label>
+                                <select id="away-season">
+                                    <option value="in">赛季进行中</option>
+                                    <option value="off">休赛期</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
+                <button class="btn-primary" onclick="runPrediction()" id="predict-btn">
+                    🔍 开始分析预测
+                </button>
+            </section>
+
+            <!-- Result Section -->
+            <section class="card result-card" id="result-card" style="display:none;">
+                <h2>📈 预测结果</h2>
+                <div id="result-content"></div>
+            </section>
+
+            <!-- Methodology -->
+            <section class="card info-card">
+                <h2>🧠 预测方法论</h2>
+                <div class="methodology">
+                    <div class="method-item">
+                        <strong>🏠 主客场表现</strong>
+                        <span>权重 22%</span>
+                        <p>主场/客场战绩对比，主场优势量化</p>
+                    </div>
+                    <div class="method-item">
+                        <strong>📊 近期状态</strong>
+                        <span>权重 20%</span>
+                        <p>最近5-10场比赛的胜平负走势</p>
+                    </div>
+                    <div class="method-item">
+                        <strong>🤝 历史交锋</strong>
+                        <span>权重 15%</span>
+                        <p>双方历史对战记录，心理优势量化</p>
+                    </div>
+                    <div class="method-item">
+                        <strong>🏆 联赛排名</strong>
+                        <span>权重 13%</span>
+                        <p>积分排名差距标准化处理</p>
+                    </div>
+                    <div class="method-item">
+                        <strong>🏥 伤病停赛</strong>
+                        <span>权重 12%</span>
+                        <p>关键球员缺阵对球队的影响评估</p>
+                    </div>
+                    <div class="method-item">
+                        <strong>⚽ 攻防数据</strong>
+                        <span>权重 10%</span>
+                        <p>场均进球/失球对比</p>
+                    </div>
+                    <div class="method-item">
+                        <strong>🔄 比赛状态</strong>
+                        <span>权重 8%</span>
+                        <p>赛季中 vs 休赛期的竞技状态差异</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>⚠️ 本系统仅供参考，足球比赛存在不确定性，请理性投注</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
